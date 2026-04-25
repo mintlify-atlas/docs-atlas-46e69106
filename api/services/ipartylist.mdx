@@ -1,0 +1,171 @@
+---
+title: "IPartyList service reference"
+description: "Access the local player's current party or alliance composition, enumerate party members, and look up member addresses in FFXIV plugins."
+---
+
+`IPartyList` is a read-only collection of `IPartyMember` objects representing the local player's current party or alliance. It implements `IReadOnlyCollection<IPartyMember>`, so you can iterate it with `foreach` or use LINQ directly. The collection reflects the live state of the game's Group Manager.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IPartyList partyList)
+{
+    foreach (var member in partyList)
+    {
+        Plugin.Log.Information($"Party member: {member.Name}");
+    }
+}
+```
+
+<Warning>
+  Access `IPartyList` only from the framework update thread. Reading party state from background threads is not thread-safe.
+</Warning>
+
+## Properties
+
+<ResponseField name="Length" type="int">
+  The number of party members currently in the group.
+</ResponseField>
+
+<ResponseField name="PartyLeaderIndex" type="uint">
+  The index of the party leader within the party list.
+</ResponseField>
+
+<ResponseField name="IsAlliance" type="bool">
+  `true` when the current group is an alliance (e.g. in an alliance raid), rather than a standard party.
+</ResponseField>
+
+<ResponseField name="PartyId" type="long">
+  The numeric identifier of the current party.
+</ResponseField>
+
+<ResponseField name="GroupManagerAddress" type="nint">
+  The memory address of the Group Manager structure.
+</ResponseField>
+
+<ResponseField name="GroupListAddress" type="nint">
+  The memory address of the party member list inside the Group Manager.
+</ResponseField>
+
+<ResponseField name="AllianceListAddress" type="nint">
+  The memory address of the alliance member list inside the Group Manager.
+</ResponseField>
+
+## Indexer
+
+```csharp
+public IPartyMember? this[int index] { get; }
+```
+
+Returns the party member at the given index, or `null` if the slot is empty.
+
+## Methods
+
+### GetPartyMemberAddress
+
+```csharp
+public nint GetPartyMemberAddress(int index);
+```
+
+Returns the raw memory address of the party member at the given index.
+
+<ParamField path="index" type="int" required>
+  The index of the party member.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The memory address of the party member structure.
+</ResponseField>
+
+---
+
+### CreatePartyMemberReference
+
+```csharp
+public IPartyMember? CreatePartyMemberReference(nint address);
+```
+
+Creates a managed `IPartyMember` wrapper for a party member at the given memory address.
+
+<ParamField path="address" type="nint" required>
+  The memory address of the party member.
+</ParamField>
+
+<ResponseField name="returns" type="IPartyMember?">
+  A managed party member reference, or `null` if the address is invalid.
+</ResponseField>
+
+---
+
+### GetAllianceMemberAddress
+
+```csharp
+public nint GetAllianceMemberAddress(int index);
+```
+
+Returns the raw memory address of an alliance member at the given index. Only relevant when `IsAlliance` is `true`.
+
+<ParamField path="index" type="int" required>
+  The index of the alliance member.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The memory address of the alliance member structure.
+</ResponseField>
+
+---
+
+### CreateAllianceMemberReference
+
+```csharp
+public IPartyMember? CreateAllianceMemberReference(nint address);
+```
+
+Creates a managed `IPartyMember` wrapper for an alliance member at the given memory address.
+
+<ParamField path="address" type="nint" required>
+  The memory address of the alliance member.
+</ParamField>
+
+<ResponseField name="returns" type="IPartyMember?">
+  A managed alliance member reference, or `null` if the address is invalid.
+</ResponseField>
+
+## Example: printing party member information
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IPartyList partyList;
+    private readonly IFramework framework;
+
+    public MyPlugin(IPartyList partyList, IFramework framework)
+    {
+        this.partyList = partyList;
+        this.framework = framework;
+        this.framework.Update += this.OnUpdate;
+    }
+
+    private void OnUpdate(IFramework fw)
+    {
+        if (this.partyList.Length == 0)
+            return;
+
+        Plugin.Log.Verbose($"Party ({this.partyList.Length} members):");
+        foreach (var member in this.partyList)
+        {
+            Plugin.Log.Verbose(
+                $"  [{member.ClassJob.GameData?.Abbreviation}] {member.Name} " +
+                $"HP {member.CurrentHP}/{member.MaxHP}");
+        }
+    }
+
+    public void Dispose()
+    {
+        this.framework.Update -= this.OnUpdate;
+    }
+}
+```

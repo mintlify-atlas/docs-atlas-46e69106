@@ -1,0 +1,124 @@
+---
+title: "Frequently asked questions about Dalamud"
+description: "Answers to common questions about using and developing for Dalamud, the FFXIV plugin framework built on top of XIVLauncher."
+---
+
+Dalamud is a plugin development framework for Final Fantasy XIV that provides access to game data and native interoperability with the game client. Whether you are an end user trying to get Dalamud running or a developer building your first plugin, this page answers the most common questions.
+
+<AccordionGroup>
+
+  <Accordion title="Is Dalamud safe to use?">
+    Dalamud is open source and its code is publicly available on [GitHub](https://github.com/goatcorp/Dalamud). The core framework itself is maintained by the goatcorp team and is audited by the community.
+
+    That said, any third-party plugin you install runs with the same permissions as Dalamud and the game process. You should only install plugins from sources you trust. Additionally, using any third-party tools — including Dalamud — is against Square Enix's Terms of Service. You use Dalamud and its plugins entirely at your own risk, and the developers accept no responsibility for any account action taken by Square Enix.
+  </Accordion>
+
+  <Accordion title="How do I install Dalamud?">
+    Dalamud is not a standalone installer. The recommended and officially supported way to use Dalamud is through **XIVLauncher**, the custom FFXIV launcher maintained by goatcorp.
+
+    1. Download XIVLauncher from [goatcorp.github.io](https://goatcorp.github.io/).
+    2. Follow the setup instructions to log in and launch the game.
+    3. Dalamud will be injected automatically when the game starts.
+
+    <Warning>
+      Do not attempt to inject Dalamud manually. XIVLauncher manages required dependencies and injection timing. Running Dalamud outside of XIVLauncher is not supported.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Why is my plugin not loading after a game update?">
+    FFXIV game updates frequently change internal memory layouts, function addresses, and binary signatures that Dalamud and plugins rely on. When the game updates, the following can break:
+
+    - **Memory signatures** used to locate game functions may no longer match.
+    - **Offsets** into game structures may shift.
+    - **API level mismatches** — if Dalamud itself updates its major version alongside the game patch, plugins must be rebuilt targeting the new API level.
+
+    After a major game update, wait for Dalamud to be updated first. Plugin authors then need to update their plugins against the new game version. You can check the Dalamud Discord for announcements on update status.
+  </Accordion>
+
+  <Accordion title="How do I access the plugin developer menu?">
+    Type `/xldev` in the in-game chat to open the Dalamud developer menu. This menu provides access to:
+
+    - A live plugin list with load/unload/reload controls
+    - The ImGui debug overlay
+    - Memory and address inspection tools
+    - An option to load plugins of all API levels (useful during development)
+
+    You can also open it programmatically from a plugin by calling `pluginInterface.OpenDeveloperMenu()` on the `IDalamudPluginInterface` instance injected into your plugin.
+  </Accordion>
+
+  <Accordion title="Can my plugin access the internet?">
+    Yes. Dalamud plugins run as standard .NET assemblies within the game process, so all standard .NET networking APIs work normally. You can use `HttpClient`, `WebSocket`, or any other networking library available via NuGet.
+
+    There are no Dalamud-imposed restrictions on outbound network access. Keep in mind that network calls should be made off the game's main thread — use `Task.Run` or `IFramework.RunOnTick` appropriately to avoid blocking frame updates.
+  </Accordion>
+
+  <Accordion title="How do I share data between plugins?">
+    Dalamud provides two mechanisms for inter-plugin communication:
+
+    **IPC (Inter-Plugin Communication)** is the primary mechanism. You obtain a provider or subscriber via `IDalamudPluginInterface`:
+
+    ```csharp
+    // In the plugin that exposes data
+    var provider = pluginInterface.GetIpcProvider<string, int>("MyPlugin.GetValue");
+    provider.RegisterFunc(key => myData[key]);
+
+    // In the plugin that consumes data
+    var subscriber = pluginInterface.GetIpcSubscriber<string, int>("MyPlugin.GetValue");
+    int result = subscriber.InvokeFunc("someKey");
+    ```
+
+    **DataShare** is a lighter-weight option for sharing plain objects by tag using `GetOrCreateData<T>`, `TryGetData<T>`, and `RelinquishData` on `IDalamudPluginInterface`. This is best suited for simple, non-versioned data blobs shared between tightly coupled plugins.
+  </Accordion>
+
+  <Accordion title="What is the difference between IFramework.Update and IUiBuilder.Draw?">
+    These two events run on different threads and serve different purposes:
+
+    | Event | Thread | Purpose |
+    |---|---|---|
+    | `IFramework.Update` | Game main thread (Framework thread) | Game logic, reading/writing game state |
+    | `IUiBuilder.Draw` | Render thread | Drawing ImGui windows and UI elements |
+
+    You should **read and write game state** (object tables, player data, conditions) in `IFramework.Update`. You should **draw UI** in `IUiBuilder.Draw`. Accessing game memory from the render thread or vice versa without synchronization can cause crashes or data corruption.
+
+    If you need to pass data between the two, store it in a field on your plugin class. Write it in `IFramework.Update` and read it in `IUiBuilder.Draw`.
+  </Accordion>
+
+  <Accordion title="Why does my hook crash the game?">
+    Hook crashes are among the most common plugin issues. The most frequent causes are:
+
+    - **Not calling the original function.** Most game hooks must call the original to preserve game behavior. Failing to call `hook.Original(...)` with the correct arguments will corrupt game state.
+    - **Incorrect function signature.** If your delegate type does not exactly match the game function's calling convention, arguments will be misread, causing undefined behavior. Double-check the signature against FFXIVClientStructs or use the `[Signature]` attribute with `IGameInteropProvider.InitializeFromAttributes`.
+    - **Throwing an unhandled exception inside a hook.** Exceptions that escape a hook detour crash the process. Wrap your hook body in a try/catch and log any exceptions via `IPluginLog`.
+    - **Hooking a function that is called on the wrong thread.** Ensure any non-thread-safe operations inside a hook are dispatched to the correct thread.
+  </Accordion>
+
+  <Accordion title="How do I debug my plugin?">
+    You can attach a managed debugger to the running FFXIV process:
+
+    **Visual Studio:** Go to **Debug → Attach to Process**, select `ffxiv_dx11.exe`, and ensure the connection type is set to **Managed (.NET Core)**.
+
+    **JetBrains Rider:** Use **Run → Attach to Process** and select the game process.
+
+    Once attached, breakpoints, watches, and the call stack all work as expected. You can also use the `/xldev` in-game menu to inspect state, reload plugins without restarting the game, and view log output. The `IPluginLog` service (injected via your plugin constructor) writes to the Dalamud log, which is visible in the dev menu under **Dalamud Internals → Log**.
+
+    <Info>
+      Check `IDalamudPluginInterface.IsDebugging` in your plugin code to detect when a debugger is attached and enable additional diagnostic output.
+    </Info>
+  </Accordion>
+
+  <Accordion title="Where can I get help?">
+    The primary support channel for Dalamud plugin development is the **goatcorp Discord server**.
+
+    <CardGroup cols={2}>
+      <Card title="Join the Discord" icon="discord" href="https://discord.gg/3NMcUV5">
+        Get help from the community and Dalamud maintainers in the `#plugin-dev` channels.
+      </Card>
+      <Card title="API Documentation" icon="book" href="https://dalamud.dev">
+        Browse the full Dalamud API reference at dalamud.dev.
+      </Card>
+    </CardGroup>
+
+    You can also open issues and browse existing discussions on the [Dalamud GitHub repository](https://github.com/goatcorp/Dalamud).
+  </Accordion>
+
+</AccordionGroup>

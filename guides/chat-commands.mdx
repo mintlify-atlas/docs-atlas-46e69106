@@ -1,0 +1,217 @@
+---
+title: "Registering chat commands and reading chat"
+description: "Learn how to register slash commands with ICommandManager, read incoming chat with IChatGui, and print messages to the FFXIV chat log in Dalamud plugins."
+---
+
+Dalamud gives your plugin two complementary chat-related services. `ICommandManager` lets you register custom slash commands that players can type in the chat box. `IChatGui` lets you subscribe to incoming chat messages from all channels and print your own messages into the chat log. Together they are the primary way plugins communicate interactively with the player.
+
+## Registering a slash command
+
+<Steps>
+  <Step title="Inject ICommandManager">
+    ```csharp
+    public sealed class MyPlugin : IDalamudPlugin
+    {
+        private readonly ICommandManager commandManager;
+
+        public MyPlugin(ICommandManager commandManager)
+        {
+            this.commandManager = commandManager;
+
+            this.commandManager.AddHandler("/myplugin", new CommandInfo(this.OnCommand)
+            {
+                HelpMessage = "Opens the My Plugin window. Use /myplugin help for more info.",
+            });
+        }
+
+        public void Dispose()
+        {
+            this.commandManager.RemoveHandler("/myplugin");
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Implement the handler">
+    The handler receives the command string and any arguments the player appended after it:
+
+    ```csharp
+    private void OnCommand(string command, string arguments)
+    {
+        // command  == "/myplugin"
+        // arguments == everything after the command, trimmed
+        switch (arguments.Trim().ToLowerInvariant())
+        {
+            case "help":
+                this.chatGui.Print("Usage: /myplugin [help|open|close]");
+                break;
+
+            case "open":
+                this.mainWindow.IsOpen = true;
+                break;
+
+            case "close":
+                this.mainWindow.IsOpen = false;
+                break;
+
+            default:
+                this.mainWindow.Toggle();
+                break;
+        }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Always call `ICommandManager.RemoveHandler()` for every command you registered during `Dispose()`. Leaving stale handlers registered after your plugin unloads will cause errors for other plugins and for Dalamud itself.
+</Warning>
+
+### CommandInfo options
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `HelpMessage` | `string` | `""` | Shown in `/xlhelp` and the plugin installer |
+| `ShowInHelp` | `bool` | `true` | Whether to list this command in `/xlhelp` |
+| `DisplayOrder` | `int` | `-1` | Sort order in help output (lower = higher) |
+
+## Reading incoming chat with IChatGui
+
+Subscribe to `IChatGui.ChatMessage` to receive a callback for every message the game sends to the chat log.
+
+```csharp
+public MyPlugin(IChatGui chatGui)
+{
+    this.chatGui = chatGui;
+    this.chatGui.ChatMessage += this.OnChatMessage;
+}
+
+public void Dispose()
+{
+    this.chatGui.ChatMessage -= this.OnChatMessage;
+}
+
+private void OnChatMessage(
+    XivChatType type,
+    int timestamp,
+    ref SeString sender,
+    ref SeString message,
+    ref bool isHandled)
+{
+    // Only react to Say channel messages
+    if (type != XivChatType.Say)
+        return;
+
+    var text = message.TextValue;
+    if (text.Contains("hello", StringComparison.OrdinalIgnoreCase))
+    {
+        Plugin.Log.Info($"Saw a greeting from {sender.TextValue}");
+    }
+}
+```
+
+### Suppressing a message
+
+Set `isHandled = true` to prevent the message from appearing in the chat log. Do this sparingly — blocking chat can confuse players:
+
+```csharp
+private void OnChatMessage(
+    XivChatType type, int timestamp,
+    ref SeString sender, ref SeString message,
+    ref bool isHandled)
+{
+    if (type == XivChatType.Debug)
+        isHandled = true; // suppress debug spam
+}
+```
+
+### Common XivChatType values
+
+| Value | Description |
+|---|---|
+| `XivChatType.Say` | /say channel |
+| `XivChatType.Party` | Party chat |
+| `XivChatType.Alliance` | Alliance chat |
+| `XivChatType.TellIncoming` | Incoming /tell |
+| `XivChatType.Shout` | /shout channel |
+| `XivChatType.Ls1` – `Ls8` | Linkshell channels 1–8 |
+| `XivChatType.Urgent` | System urgent messages |
+| `XivChatType.Notice` | System notice messages |
+
+## Printing to the chat log
+
+Use `IChatGui.Print()` to write a message into the player's chat log. Messages are queued and dispatched on the next framework tick.
+
+```csharp
+// Simple string
+this.chatGui.Print("Hello, world!");
+
+// With a plugin tag (shown as "[MyPlugin] Hello!")
+this.chatGui.Print("Hello!", "MyPlugin");
+
+// Error variant — displayed in red
+this.chatGui.PrintError("Something went wrong.", "MyPlugin");
+
+// Structured XivChatEntry for full control
+this.chatGui.Print(new XivChatEntry
+{
+    Type    = XivChatType.Notice,
+    Message = new SeString(new TextPayload("Structured message")),
+});
+```
+
+<Note>
+Chat messages printed by plugins are visible only to the local player. They are injected directly into the client-side chat log and are not sent over the network.
+</Note>
+
+## Complete example
+
+The following shows a fully self-contained plugin that registers `/greet`, prints a greeting, and echoes Say channel messages:
+
+```csharp
+using Dalamud.Game.Command;
+using Dalamud.Game.Text;
+using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class GreetPlugin : IDalamudPlugin
+{
+    private readonly ICommandManager commandManager;
+    private readonly IChatGui chatGui;
+
+    public GreetPlugin(ICommandManager commandManager, IChatGui chatGui)
+    {
+        this.commandManager = commandManager;
+        this.chatGui        = chatGui;
+
+        this.commandManager.AddHandler("/greet", new CommandInfo(this.OnGreet)
+        {
+            HelpMessage = "Print a greeting to chat.",
+        });
+
+        this.chatGui.ChatMessage += this.OnChatMessage;
+    }
+
+    private void OnGreet(string command, string args)
+    {
+        var name = string.IsNullOrWhiteSpace(args) ? "adventurer" : args.Trim();
+        this.chatGui.Print($"Greetings, {name}!", "GreetPlugin");
+    }
+
+    private void OnChatMessage(
+        XivChatType type, int timestamp,
+        ref SeString sender, ref SeString message,
+        ref bool isHandled)
+    {
+        if (type == XivChatType.Say)
+            Plugin.Log.Debug($"[Say] {sender.TextValue}: {message.TextValue}");
+    }
+
+    public void Dispose()
+    {
+        this.chatGui.ChatMessage -= this.OnChatMessage;
+        this.commandManager.RemoveHandler("/greet");
+    }
+}
+```

@@ -1,0 +1,170 @@
+---
+title: "AsmHook class reference"
+description: "Patch native FFXIV game code with raw FASM-syntax assembly instructions using Dalamud's AsmHook for cases where Hook<T> is not applicable."
+---
+
+`AsmHook` installs raw assembly code at a given memory address in the FFXIV game process. Unlike `Hook<T>`, which replaces an entire function call with a managed delegate, `AsmHook` patches individual instructions mid-function or at arbitrary addresses. Use it only when a typed delegate hook cannot solve the problem — for example, when you need to inject code at an instruction boundary deep inside a function body.
+
+`AsmHook` always uses the Reloaded backend (`BackendName` returns `"Reloaded/Asm"`).
+
+<Warning>
+  `AsmHook` writes raw machine code into the game process. An incorrect instruction sequence will instantly crash the game or corrupt state in ways that are extremely difficult to diagnose. Always prefer `Hook<T>` and `IGameInteropProvider` when possible.
+</Warning>
+
+## Constructors
+
+### AsmHook(IntPtr, byte[], string, AsmHookBehaviour)
+
+```csharp
+public AsmHook(
+    IntPtr address,
+    byte[] assembly,
+    string name,
+    AsmHookBehaviour asmHookBehaviour = AsmHookBehaviour.ExecuteFirst);
+```
+
+Creates an `AsmHook` from pre-assembled machine code bytes. The hook is **not** active until you call `Enable()`.
+
+<ParamField path="address" type="IntPtr" required>
+  The memory address at which to install the patch. Typically resolved via `ISigScanner` or `IGameInteropProvider`.
+</ParamField>
+
+<ParamField path="assembly" type="byte[]" required>
+  The raw machine code bytes to inject at `address`.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  A descriptive name for this hook, used in Dalamud's hook tracking and log output (e.g. `"MyPlugin.MyPatch"`).
+</ParamField>
+
+<ParamField path="asmHookBehaviour" type="AsmHookBehaviour">
+  Controls the execution order relative to the original code. Defaults to `ExecuteFirst`.
+</ParamField>
+
+---
+
+### AsmHook(IntPtr, string[], string, AsmHookBehaviour)
+
+```csharp
+public AsmHook(
+    IntPtr address,
+    string[] assembly,
+    string name,
+    AsmHookBehaviour asmHookBehaviour = AsmHookBehaviour.ExecuteFirst);
+```
+
+Creates an `AsmHook` from FASM-syntax assembly source strings. Reloaded assembles them at runtime. The first line must be `"use64"` to specify 64-bit mode.
+
+<ParamField path="address" type="IntPtr" required>
+  The memory address at which to install the patch.
+</ParamField>
+
+<ParamField path="assembly" type="string[]" required>
+  FASM-syntax assembly lines. The first element must be `"use64"`.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  A descriptive name for this hook.
+</ParamField>
+
+<ParamField path="asmHookBehaviour" type="AsmHookBehaviour">
+  Execution order relative to original code. Defaults to `ExecuteFirst`.
+</ParamField>
+
+## AsmHookBehaviour enum
+
+Controls when your injected assembly runs relative to the original code at the hook address.
+
+| Value | Description |
+|---|---|
+| `ExecuteFirst` | Your assembly runs before the original code. Default. |
+| `ExecuteAfter` | Your assembly runs after the original code. |
+| `DoNotExecuteOriginal` | The original code is skipped entirely. Extremely dangerous — only use when you know the function can be completely replaced. |
+
+## Properties
+
+<ResponseField name="Address" type="IntPtr">
+  The memory address where the hook is installed. Throws `ObjectDisposedException` after `Dispose()`.
+</ResponseField>
+
+<ResponseField name="IsEnabled" type="bool">
+  `true` when the hook is active. Throws `ObjectDisposedException` after `Dispose()`.
+</ResponseField>
+
+<ResponseField name="IsDisposed" type="bool">
+  `true` after `Dispose()` has been called.
+</ResponseField>
+
+<ResponseField name="BackendName" type="string">
+  Always `"Reloaded/Asm"`.
+</ResponseField>
+
+## Methods
+
+### Enable
+
+```csharp
+public void Enable();
+```
+
+Activates and enables the hook. The injected assembly is applied to the target address. On the first call this activates the underlying Reloaded hook; subsequent calls just toggle the enabled state.
+
+### Disable
+
+```csharp
+public void Disable();
+```
+
+Stops the hook from running. The original code at the address is restored. The hook remains installed and can be re-enabled.
+
+### Dispose
+
+```csharp
+public void Dispose();
+```
+
+Removes the hook and releases all resources. If the hook was enabled, it is disabled first. Safe to call multiple times.
+
+## Example: zeroing a field mid-function
+
+```csharp
+using Dalamud.Hooking;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly AsmHook fieldPatch;
+
+    public MyPlugin(ISigScanner sigScanner)
+    {
+        // Locate the instruction we want to patch
+        var patchAddress = sigScanner.ScanText("48 8B 05 ?? ?? ?? ?? 48 85 C0");
+
+        // FASM syntax: clear a field at [rsi+0x10]
+        var asmLines = new[]
+        {
+            "use64",
+            "xor eax, eax",
+            "mov [rsi+0x10], rax",
+        };
+
+        this.fieldPatch = new AsmHook(
+            patchAddress,
+            asmLines,
+            "MyPlugin.FieldZeroPatch",
+            AsmHookBehaviour.ExecuteFirst);
+
+        this.fieldPatch.Enable();
+    }
+
+    public void Dispose()
+    {
+        this.fieldPatch.Dispose();
+    }
+}
+```
+
+<Note>
+  `AsmHook` does not give you a way to call the original function by reference the way `Hook<T>.Original` does. If you use `DoNotExecuteOriginal`, you are fully replacing the code — ensure you understand all side effects.
+</Note>

@@ -1,0 +1,182 @@
+---
+title: "Persisting plugin configuration with Dalamud"
+description: "Learn how to save and load plugin configuration using IPluginConfiguration, IDalamudPluginInterface.SavePluginConfig, and GetPluginConfig in Dalamud plugins."
+---
+
+Dalamud provides a simple, built-in mechanism for persisting plugin settings between sessions. You define a configuration class that implements `IPluginConfiguration`, then call `IDalamudPluginInterface.SavePluginConfig()` to write it to disk and `GetPluginConfig()` to read it back. Dalamud serializes and deserializes your class as JSON automatically, storing it in the user's XIVLauncher configuration directory.
+
+## Defining your configuration class
+
+Your configuration must implement `Dalamud.Configuration.IPluginConfiguration`, which requires a single `int Version` property. Add all your settings as additional properties:
+
+```csharp
+using Dalamud.Configuration;
+
+[Serializable]
+public sealed class MyPluginConfig : IPluginConfiguration
+{
+    // Required by IPluginConfiguration
+    public int Version { get; set; } = 1;
+
+    // Your settings
+    public bool ShowMainWindow { get; set; } = true;
+    public float NotificationVolume { get; set; } = 0.8f;
+    public string WelcomeMessage { get; set; } = "Hello!";
+    public List<string> FavouriteItems { get; set; } = [];
+}
+```
+
+<Tip>
+Increment `Version` every time you make breaking changes to your configuration schema, then handle migration in your plugin's constructor before using the loaded data. This prevents older saved files from causing errors after a plugin update.
+</Tip>
+
+## Loading configuration in your plugin constructor
+
+Call `GetPluginConfig()` during plugin startup and cast the result to your concrete config type. If no configuration file exists yet, the method returns `null` and you should fall back to a new default instance:
+
+```csharp
+using Dalamud.Configuration;
+using Dalamud.Plugin;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IDalamudPluginInterface pluginInterface;
+    private MyPluginConfig config;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        this.pluginInterface = pluginInterface;
+
+        // Load saved config, or create defaults if none exists
+        this.config = this.pluginInterface.GetPluginConfig() as MyPluginConfig
+                      ?? new MyPluginConfig();
+
+        // Migrate if necessary
+        if (this.config.Version < 1)
+            this.MigrateConfigToV1();
+    }
+
+    private void MigrateConfigToV1()
+    {
+        // Apply any transformations needed for older saved data
+        this.config.Version = 1;
+        this.SaveConfig();
+    }
+}
+```
+
+## Saving configuration
+
+Call `SavePluginConfig()` whenever settings change. Dalamud serializes the object to JSON and writes it atomically to disk:
+
+```csharp
+private void SaveConfig()
+{
+    this.pluginInterface.SavePluginConfig(this.config);
+}
+```
+
+Trigger this after the user confirms a settings change, or on `Dispose()` if you want to persist any unsaved state on plugin unload:
+
+```csharp
+public void Dispose()
+{
+    // Optionally persist last-known state
+    this.SaveConfig();
+}
+```
+
+## Configuration file location
+
+Dalamud stores each plugin's configuration file at:
+
+```
+%APPDATA%\XIVLauncher\pluginConfig\<PluginInternalName>.json
+```
+
+You can also access the directory and file directly via `IDalamudPluginInterface`:
+
+```csharp
+// Directory: %APPDATA%\XIVLauncher\pluginConfig\<InternalName>\
+DirectoryInfo configDir = this.pluginInterface.ConfigDirectory;
+
+// File:      %APPDATA%\XIVLauncher\pluginConfig\<InternalName>.json
+FileInfo configFile = this.pluginInterface.ConfigFile;
+
+// Or as a string path:
+string configDirPath = this.pluginInterface.GetPluginConfigDirectory();
+```
+
+<Note>
+`ConfigDirectory` (a sub-directory) is distinct from `ConfigFile` (the main JSON file). The sub-directory is a good place to store supplementary data files that you manage yourself, such as preset bundles or cached data.
+</Note>
+
+## Complete example
+
+The following is a minimal, self-contained plugin that loads, uses, and saves configuration:
+
+```csharp
+using Dalamud.Configuration;
+using Dalamud.Plugin;
+
+[Serializable]
+public sealed class PluginConfig : IPluginConfiguration
+{
+    public int Version { get; set; } = 1;
+    public bool Enabled { get; set; } = true;
+    public string Greeting { get; set; } = "Hello!";
+}
+
+public sealed class ConfigPlugin : IDalamudPlugin
+{
+    private readonly IDalamudPluginInterface pi;
+    private readonly PluginConfig config;
+
+    public ConfigPlugin(IDalamudPluginInterface pi)
+    {
+        this.pi     = pi;
+        this.config = pi.GetPluginConfig() as PluginConfig ?? new PluginConfig();
+    }
+
+    // Called from a settings UI, command handler, etc.
+    public void SetGreeting(string greeting)
+    {
+        this.config.Greeting = greeting;
+        this.pi.SavePluginConfig(this.config);
+    }
+
+    public string GetGreeting() => this.config.Greeting;
+
+    public void Dispose()
+    {
+        this.pi.SavePluginConfig(this.config);
+    }
+}
+```
+
+<Accordion title="Handling version migrations">
+  Use the `Version` field to detect and upgrade old configurations:
+
+  ```csharp
+  private void ApplyMigrations()
+  {
+      if (this.config.Version == 0)
+      {
+          // Version 0 → 1: rename OldField to NewField
+          this.config.NewField = this.config.OldField;
+          this.config.Version  = 1;
+      }
+
+      if (this.config.Version == 1)
+      {
+          // Version 1 → 2: introduce new default
+          this.config.SomeNewSetting = true;
+          this.config.Version = 2;
+      }
+
+      this.pi.SavePluginConfig(this.config);
+  }
+  ```
+
+  Call `ApplyMigrations()` immediately after loading the config in your constructor, before any other code touches the configuration object.
+</Accordion>

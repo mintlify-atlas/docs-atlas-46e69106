@@ -1,0 +1,192 @@
+---
+title: "Hooking FFXIV game functions with Dalamud"
+description: "Learn how to intercept native FFXIV game functions using Dalamud's IGameInteropProvider, Hook<T>, the Signature attribute, and AsmHook for raw patches."
+---
+
+Hooking lets your plugin intercept calls to native FFXIV game functions and either observe their arguments or alter their behavior. Dalamud wraps Reloaded-II's hooking library behind `IGameInteropProvider`, which provides a safe, tracked interface for creating, enabling, and disposing hooks. You locate functions by scanning the game's binary for byte-pattern signatures, then install a delegate (your "detour") that runs instead of the original.
+
+<Warning>
+Always call the original function from your detour unless you have a specific, well-understood reason not to. Skipping the original can corrupt game state, cause crashes, or break other plugins that hook the same function. If you are unsure, call the original.
+</Warning>
+
+## The [Signature] attribute approach (recommended)
+
+The easiest way to hook multiple functions is to declare `Hook<T>` fields on your class, annotate them with `[Signature]`, and call `InitializeFromAttributes`. Dalamud resolves the signatures, creates the hooks, and wires your detour methods automatically.
+
+```csharp
+using Dalamud.Hooking;
+using Dalamud.Plugin.Services;
+using Dalamud.Utility.Signatures;
+
+public sealed class MyHookHandler : IDisposable
+{
+    // Delegate matching the native function prototype
+    private delegate void UseActionDelegate(nint actionManager, uint actionType,
+                                            uint actionId, nint target);
+
+    // Dalamud scans for this byte pattern and creates the hook automatically
+    [Signature("E8 ?? ?? ?? ?? EB 64 B1 01", DetourName = nameof(UseActionDetour))]
+    private Hook<UseActionDelegate>? useActionHook = null;
+
+    public MyHookHandler(IGameInteropProvider interopProvider)
+    {
+        // Fills in all [Signature]-annotated fields on this instance
+        interopProvider.InitializeFromAttributes(this);
+
+        this.useActionHook?.Enable();
+    }
+
+    private void UseActionDetour(nint actionManager, uint actionType,
+                                 uint actionId, nint target)
+    {
+        Plugin.Log.Debug($"UseAction called: type={actionType} id={actionId}");
+        // Always call the original unless you know what you're doing
+        this.useActionHook!.Original(actionManager, actionType, actionId, target);
+    }
+
+    public void Dispose()
+    {
+        this.useActionHook?.Dispose();
+    }
+}
+```
+
+### SignatureAttribute properties
+
+| Property | Description |
+|---|---|
+| `Signature` | The byte-pattern string to scan for (e.g. `"E8 ?? ?? ?? ??"`). `??` is a wildcard. |
+| `DetourName` | Name of the detour method on the same class. Required when Dalamud can't infer it. |
+| `UseFlags` | Override how the found address is used (`Hook`, `Offset`, `Pointer`). Default: `Auto`. |
+| `ScanType` | `Text` (default) or `StaticAddress`. |
+| `Fallibility` | `Auto`, `Fallible`, or `NonFallible`. Fallible signatures log errors instead of throwing. |
+
+## Creating hooks manually
+
+When you only need one or two hooks, or when you already have a resolved address, call `HookFromSignature` or `HookFromAddress` directly:
+
+```csharp
+public sealed class MyPlugin : IDalamudPlugin, IDisposable
+{
+    private delegate nint SomeNativeFuncDelegate(nint a1, int a2);
+
+    private readonly Hook<SomeNativeFuncDelegate> hook;
+
+    public MyPlugin(IGameInteropProvider interopProvider)
+    {
+        // Create from a byte signature
+        this.hook = interopProvider.HookFromSignature<SomeNativeFuncDelegate>(
+            "48 89 5C 24 ?? 57 48 83 EC 20 48 8B F9",
+            this.Detour);
+
+        this.hook.Enable();
+    }
+
+    private nint Detour(nint a1, int a2)
+    {
+        Plugin.Log.Debug($"SomeNativeFunc(a1=0x{a1:X}, a2={a2})");
+        return this.hook.Original(a1, a2);
+    }
+
+    public void Dispose()
+    {
+        this.hook.Dispose();
+    }
+}
+```
+
+### Hook methods from IGameInteropProvider
+
+| Method | When to use |
+|---|---|
+| `HookFromSignature<T>(sig, detour)` | Scan the game binary for a byte pattern |
+| `HookFromAddress<T>(addr, detour)` | You already have a resolved `nint` / `nuint` / `void*` |
+| `HookFromSymbol<T>(module, export, detour)` | Hook an exported DLL symbol by name |
+| `HookFromImport<T>(...)` | Patch an import table entry |
+| `InitializeFromAttributes(obj)` | Resolve all `[Signature]` fields on an object |
+
+## Managing hook lifetime
+
+```csharp
+this.hook.Enable();    // Start intercepting calls
+this.hook.Disable();   // Stop intercepting, original runs again
+this.hook.Dispose();   // Remove the hook entirely and release resources
+```
+
+`IsEnabled` and `IsDisposed` are available on every `Hook<T>` to query state. Always dispose hooks during your plugin's `Dispose()` call.
+
+<Note>
+`Hook<T>.OriginalDisposeSafe` is a version of `Original` that can be called even after `Dispose()`. Use this when you need to call the original from a cleanup code path that may run after the hook is already gone.
+</Note>
+
+## AsmHook for raw assembly patches
+
+`AsmHook` is reserved for cases where a typed delegate hook is not suitable — for example, patching mid-function or changing register state at an instruction boundary. Use it only when `Hook<T>` cannot solve the problem.
+
+```csharp
+using Dalamud.Hooking;
+
+// FASM-syntax assembly; first line must be "use64"
+var assembly = new[]
+{
+    "use64",
+    "mov [rsi+0x10], 0",   // zero out a field
+};
+
+// Resolve the address first (e.g. via ISigScanner or interopProvider)
+var address = resolvedAddress;
+
+var asmHook = new AsmHook(
+    address,
+    assembly,
+    "MyPlugin.SomePatch",
+    AsmHookBehaviour.ExecuteFirst);
+
+asmHook.Enable();
+
+// Later:
+asmHook.Dispose();
+```
+
+<Warning>
+`AsmHook` writes raw machine code into the game process. Mistakes can instantly crash the game. Prefer `Hook<T>` whenever possible.
+</Warning>
+
+## Complete example
+
+The following shows a self-contained class that hooks a game function using the `[Signature]` pattern, logs arguments, modifies a return value, and cleans up correctly:
+
+```csharp
+using Dalamud.Hooking;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+using Dalamud.Utility.Signatures;
+
+public sealed class DamageHookHandler : IDisposable
+{
+    private delegate int CalcDamageDelegate(nint actionManager, uint actionId,
+                                             nint target, byte a4);
+
+    [Signature(
+        "E8 ?? ?? ?? ?? 44 8B C0 33 D2",
+        DetourName = nameof(CalcDamageDetour),
+        Fallibility = Fallibility.Fallible)]
+    private Hook<CalcDamageDelegate>? calcDamageHook = null;
+
+    public DamageHookHandler(IGameInteropProvider interopProvider)
+    {
+        interopProvider.InitializeFromAttributes(this);
+        this.calcDamageHook?.Enable();
+    }
+
+    private int CalcDamageDetour(nint actionManager, uint actionId,
+                                  nint target, byte a4)
+    {
+        var result = this.calcDamageHook!.Original(actionManager, actionId, target, a4);
+        Plugin.Log.Verbose($"Damage calculated: actionId={actionId} result={result}");
+        return result;
+    }
+
+    public void Dispose() => this.calcDamageHook?.Dispose();
+}
+```

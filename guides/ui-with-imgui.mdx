@@ -1,0 +1,214 @@
+---
+title: "Building plugin UI with ImGui and Dalamud"
+description: "Learn how to build in-game plugin windows using Dalamud's ImGui overlay system, WindowSystem, and INotificationManager for toast notifications."
+---
+
+Dalamud renders plugin UI through an ImGui overlay that sits on top of the FFXIV DirectX 11 swap chain. You subscribe to the `IUiBuilder.Draw` event to issue ImGui calls each frame, use `WindowSystem` to manage one or more named windows, and subclass `Window` to encapsulate each window's state and draw logic.
+
+<Warning>
+You must **only** call ImGui APIs inside the `Draw` callback (or inside a `Window.Draw()` override that is invoked by `WindowSystem.Draw()`). Calling ImGui outside this callback is unsupported and will produce undefined behavior or crashes.
+</Warning>
+
+## Setting up IUiBuilder
+
+Dalamud injects `IDalamudPluginInterface` into your plugin constructor. Its `UiBuilder` property exposes the events you need:
+
+```csharp
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IDalamudPluginInterface pluginInterface;
+    private readonly WindowSystem windowSystem = new("MyPlugin");
+    private readonly MyMainWindow mainWindow;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        this.pluginInterface = pluginInterface;
+        this.mainWindow = new MyMainWindow();
+        this.windowSystem.AddWindow(this.mainWindow);
+
+        pluginInterface.UiBuilder.Draw += this.OnDraw;
+        pluginInterface.UiBuilder.OpenMainUi += this.OnOpenMainUi;
+    }
+
+    private void OnDraw() => this.windowSystem.Draw();
+
+    private void OnOpenMainUi() => this.mainWindow.IsOpen = true;
+
+    public void Dispose()
+    {
+        this.pluginInterface.UiBuilder.Draw -= this.OnDraw;
+        this.pluginInterface.UiBuilder.OpenMainUi -= this.OnOpenMainUi;
+        this.windowSystem.RemoveAllWindows();
+    }
+}
+```
+
+### IUiBuilder events
+
+| Event | Purpose |
+|---|---|
+| `Draw` | Called every frame — issue all ImGui calls here |
+| `OpenMainUi` | Fired when the user clicks your plugin's main button in the plugin list |
+| `OpenConfigUi` | Fired when the user clicks your plugin's settings button |
+| `ShowUi` / `HideUi` | Called when the game asks plugins to show or hide their UI |
+
+## Creating windows with WindowSystem
+
+`WindowSystem` manages a named collection of `Window` objects and calls each one's draw logic inside the `Draw()` call you forward to it. Each window must have a **unique name** within its `WindowSystem`.
+
+<Steps>
+  <Step title="Subclass Window">
+    Extend `Dalamud.Interface.Windowing.Window` and override the abstract `Draw()` method:
+
+    ```csharp
+    using Dalamud.Interface.Windowing;
+    using ImGuiNET;
+
+    public sealed class MyMainWindow : Window
+    {
+        public MyMainWindow() : base("My Plugin##MainWindow")
+        {
+            this.Size = new System.Numerics.Vector2(400, 300);
+            this.SizeCondition = ImGuiCond.FirstUseEver;
+        }
+
+        public override void Draw()
+        {
+            ImGui.Text("Hello from my plugin!");
+
+            if (ImGui.Button("Click me"))
+            {
+                // handle click
+            }
+        }
+    }
+    ```
+
+    <Note>
+    If you need multiple windows with similar names, append `###UniqueId` after the display name. ImGui uses the part after `###` as the stable window ID, keeping the visible title separate.
+    </Note>
+  </Step>
+
+  <Step title="Register and draw the window">
+    Add the window to your `WindowSystem` and forward `UiBuilder.Draw` to `WindowSystem.Draw()`:
+
+    ```csharp
+    this.windowSystem.AddWindow(new MyMainWindow());
+    pluginInterface.UiBuilder.Draw += () => this.windowSystem.Draw();
+    ```
+  </Step>
+
+  <Step title="Open and close the window">
+    Toggle `Window.IsOpen` or call `Window.Toggle()` from command handlers or other events:
+
+    ```csharp
+    this.mainWindow.IsOpen = true;
+    // or
+    this.mainWindow.Toggle();
+    ```
+  </Step>
+</Steps>
+
+### Useful Window properties
+
+| Property | Description |
+|---|---|
+| `IsOpen` | Controls whether the window is rendered |
+| `Size` / `SizeCondition` | Initial size and when to apply it |
+| `Position` / `PositionCondition` | Initial position and when to apply it |
+| `SizeConstraints` | Min/max size limits |
+| `ShowCloseButton` | Whether to show the title-bar close button |
+| `Flags` | `ImGuiWindowFlags` for the window |
+| `ForceMainWindow` | Constrain the window to the main game viewport |
+| `AllowPinning` / `AllowClickthrough` | Enable built-in user options |
+
+### Window lifecycle overrides
+
+Override these virtual methods to react to lifecycle events:
+
+```csharp
+public override void OnOpen()  { /* window just became visible */ }
+public override void OnClose() { /* window just closed */ }
+public override void Update()  { /* called every frame even when collapsed */ }
+public override bool DrawConditions() => someConditionIsTrue; // skip draw if false
+public override void PreDraw()  { /* push styles before ImGui.Begin */ }
+public override void PostDraw() { /* pop styles after ImGui.End */ }
+```
+
+## Common ImGui calls
+
+Inside `Draw()` you have access to the full ImGui API via `ImGuiNET.ImGui`:
+
+```csharp
+public override void Draw()
+{
+    // Text
+    ImGui.Text("Plain text");
+    ImGui.TextColored(new Vector4(1, 0.5f, 0, 1), "Orange text");
+    ImGui.TextWrapped("Long text that wraps inside the window boundaries.");
+
+    // Buttons
+    if (ImGui.Button("Save"))
+        Save();
+
+    ImGui.SameLine();
+
+    if (ImGui.SmallButton("Cancel"))
+        Cancel();
+
+    // Input
+    ImGui.InputText("Name", ref this.nameBuffer, 128);
+    ImGui.SliderFloat("Value", ref this.floatValue, 0f, 1f);
+    ImGui.Checkbox("Enabled", ref this.isEnabled);
+
+    // Layout
+    ImGui.Separator();
+    ImGui.Spacing();
+    if (ImGui.BeginTabBar("Tabs"))
+    {
+        if (ImGui.BeginTabItem("General"))
+        {
+            ImGui.Text("General tab content");
+            ImGui.EndTabItem();
+        }
+        ImGui.EndTabBar();
+    }
+}
+```
+
+<Info>
+Dalamud's `ImGuiHelpers` and `ImRaii` utilities wrap common patterns such as `ImRaii.PushColor`, `ImGuiHelpers.ScaledDummy`, and scoped push/pop to reduce boilerplate and prevent leaking style state.
+</Info>
+
+## Toast notifications with INotificationManager
+
+Use `INotificationManager` (injected via the service container) to display non-blocking toast notifications in Dalamud's notification area:
+
+```csharp
+using Dalamud.Interface.ImGuiNotification;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly INotificationManager notifications;
+
+    public MyPlugin(INotificationManager notifications)
+    {
+        this.notifications = notifications;
+    }
+
+    private void ShowToast()
+    {
+        this.notifications.AddNotification(new Notification
+        {
+            Title = "My Plugin",
+            Content = "Operation completed successfully.",
+            Type = NotificationType.Success,
+        });
+    }
+}
+```
+
+<Accordion title="Available notification types">
+  `NotificationType.Info`, `NotificationType.Success`, `NotificationType.Warning`, and `NotificationType.Error` map to visually distinct notification styles. You can also set `Minimized`, `InitialDuration`, and other properties on `Notification` to control behavior.
+</Accordion>

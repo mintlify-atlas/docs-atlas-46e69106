@@ -1,0 +1,192 @@
+---
+title: "ICommandManager service reference"
+description: "Register, remove, and dispatch in-game slash commands from your plugin, and inspect all currently registered commands across Dalamud."
+---
+
+`ICommandManager` manages in-game slash commands. You use it to register custom commands that players can type in the chat input, enumerate all currently registered commands, and programmatically dispatch commands on behalf of the player.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(ICommandManager commandManager)
+{
+    commandManager.AddHandler("/myplugin", new CommandInfo(OnCommand)
+    {
+        HelpMessage = "Opens the MyPlugin window."
+    });
+}
+```
+
+## CommandInfo
+
+`CommandInfo` describes a registered command. Pass it to `AddHandler` when registering.
+
+```csharp
+public CommandInfo(IReadOnlyCommandInfo.HandlerDelegate handler);
+```
+
+<ResponseField name="Handler" type="HandlerDelegate">
+  The callback invoked when the command is dispatched. Signature: `void Handler(string command, string arguments)`.
+</ResponseField>
+
+<ResponseField name="HelpMessage" type="string">
+  The help text displayed in `/xlhelp` or by other plugins that enumerate commands. Defaults to an empty string.
+</ResponseField>
+
+<ResponseField name="ShowInHelp" type="bool">
+  Whether this command appears in the Dalamud help listing. Defaults to `true`.
+</ResponseField>
+
+<ResponseField name="DisplayOrder" type="int">
+  The sort position of this command in help listings. `-1` means alphabetical ordering (the default).
+</ResponseField>
+
+### HandlerDelegate signature
+
+```csharp
+public delegate void HandlerDelegate(string command, string arguments);
+```
+
+<ParamField path="command" type="string" required>
+  The command that was invoked, including the leading `/` (e.g. `/myplugin`).
+</ParamField>
+
+<ParamField path="arguments" type="string" required>
+  Everything typed after the command name, trimmed of leading whitespace and ready for parsing.
+</ParamField>
+
+## Properties
+
+<ResponseField name="Commands" type="ReadOnlyDictionary<string, IReadOnlyCommandInfo>">
+  A snapshot of all currently registered commands, keyed by the command string (including `/`). Iterate this to enumerate commands from all plugins.
+</ResponseField>
+
+## Methods
+
+### AddHandler
+
+```csharp
+public bool AddHandler(string command, CommandInfo info);
+```
+
+Registers a new slash command. Returns `true` on success. The command string must start with `/` and must not already be registered.
+
+<ParamField path="command" type="string" required>
+  The slash command to register, e.g. `"/myplugin"`. Must include the leading `/`.
+</ParamField>
+
+<ParamField path="info" type="CommandInfo" required>
+  A `CommandInfo` instance describing the handler, help text, and display options.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the command was added successfully; `false` if the command string was already taken.
+</ResponseField>
+
+---
+
+### RemoveHandler
+
+```csharp
+public bool RemoveHandler(string command);
+```
+
+Unregisters a previously added slash command. Always call this in your plugin's `Dispose` method.
+
+<ParamField path="command" type="string" required>
+  The slash command to unregister, e.g. `"/myplugin"`.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the command was found and removed; `false` if it was not registered.
+</ResponseField>
+
+---
+
+### ProcessCommand
+
+```csharp
+public bool ProcessCommand(string content);
+```
+
+Parses and dispatches a full command string exactly as if the player had typed it in the chat box.
+
+<ParamField path="content" type="string" required>
+  The full command string including the `/` prefix and any arguments, e.g. `"/myplugin open"`.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the command was found and dispatched; `false` if no matching command was registered.
+</ResponseField>
+
+---
+
+### DispatchCommand
+
+```csharp
+public void DispatchCommand(string command, string argument, IReadOnlyCommandInfo info);
+```
+
+Directly invokes a command handler without going through the full parsing pipeline. Use when you already have the split command and arguments.
+
+<ParamField path="command" type="string" required>
+  The command string (e.g. `"/myplugin"`).
+</ParamField>
+
+<ParamField path="argument" type="string" required>
+  The argument string to pass to the handler.
+</ParamField>
+
+<ParamField path="info" type="IReadOnlyCommandInfo" required>
+  The `CommandInfo` for the command to dispatch.
+</ParamField>
+
+## Example: registering a command with help text
+
+```csharp
+using Dalamud.Game.Command;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private const string CommandName = "/myplugin";
+    private readonly ICommandManager commandManager;
+
+    public MyPlugin(ICommandManager commandManager)
+    {
+        this.commandManager = commandManager;
+
+        commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
+        {
+            HelpMessage = "Type /myplugin [open|close] to control the plugin window.",
+            ShowInHelp = true,
+        });
+    }
+
+    private void OnCommand(string command, string arguments)
+    {
+        switch (arguments.Trim().ToLowerInvariant())
+        {
+            case "open":
+                // open the plugin window
+                break;
+            case "close":
+                // close the plugin window
+                break;
+            default:
+                Plugin.Log.Info($"Unknown argument: {arguments}");
+                break;
+        }
+    }
+
+    public void Dispose()
+    {
+        commandManager.RemoveHandler(CommandName);
+    }
+}
+```
+
+<Tip>
+  Always remove your command handlers in `Dispose`. Leaving a stale handler registered prevents another plugin or a plugin reload from registering the same command name.
+</Tip>

@@ -1,0 +1,271 @@
+---
+title: "IGameInteropProvider service reference"
+description: "Create and manage hooks into native game functions by address, signature, or import table, using Reloaded or MinHook as the hooking backend."
+---
+
+`IGameInteropProvider` is the primary way to intercept native game functions in Dalamud. You use it to install hooks via memory signature, raw address, or import table entry, and to automatically initialize hook fields on a class using the `[Signature]` attribute.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IGameInteropProvider gameInterop)
+{
+    gameInterop.InitializeFromAttributes(this);
+}
+```
+
+<Warning>
+  Hooks must be enabled after creation by calling `.Enable()`, and must be disposed when your plugin unloads. Leaving an enabled hook alive after plugin unload will crash the game.
+</Warning>
+
+## HookBackend enum
+
+Controls which hooking library is used to install a hook.
+
+| Value | Description |
+|-------|-------------|
+| `Automatic` | Dalamud selects the best available backend. Use this in almost all cases. |
+| `Reloaded` | Forces use of Reloaded.Hooks. The preferred backend for most game hooks. |
+| `MinHook` | Forces use of MinHook. Use only after verifying that `Reloaded` does not work for a specific target. |
+
+<Warning>
+  Do not use `MinHook` without consulting the Dalamud team. It is provided for edge cases and may interfere with other hooks.
+</Warning>
+
+## Methods
+
+### InitializeFromAttributes
+
+```csharp
+public void InitializeFromAttributes(object self);
+```
+
+Scans `self` for fields and properties decorated with `[Signature]` and initializes them automatically:
+
+- `Hook<T>` fields are created and optionally enabled.
+- Delegate fields are resolved to the matched address.
+- `nint` / `IntPtr` fields are set to the resolved address.
+
+Errors for signatures marked as fallible are logged without throwing.
+
+<ParamField path="self" type="object" required>
+  The object whose members should be scanned and initialized. Typically `this` from your plugin class or a service class.
+</ParamField>
+
+---
+
+### HookFromSignature\<T\>
+
+```csharp
+public Hook<T> HookFromSignature<T>(
+    string signature,
+    T detour,
+    HookBackend backend = HookBackend.Automatic)
+    where T : Delegate;
+```
+
+Scans the main game module for `signature` and creates a hook at the matched address. The hook is **not** enabled until you call `.Enable()`.
+
+<ParamField path="signature" type="string" required>
+  An IDA-style byte pattern string used to locate the target function (e.g. `"48 89 5C 24 ?? 48 89 74 24 ?? 57"`).
+</ParamField>
+
+<ParamField path="detour" type="T" required>
+  Your callback delegate. It must have the exact same signature as the function being hooked.
+</ParamField>
+
+<ParamField path="backend" type="HookBackend">
+  The hooking library to use. Defaults to `Automatic`.
+</ParamField>
+
+<ResponseField name="returns" type="Hook<T>">
+  The installed hook. Call `.Enable()` to activate it, and `.Dispose()` when your plugin unloads.
+</ResponseField>
+
+---
+
+### HookFromAddress\<T\>
+
+```csharp
+public Hook<T> HookFromAddress<T>(nint procAddress, T detour, HookBackend backend = HookBackend.Automatic) where T : Delegate;
+public Hook<T> HookFromAddress<T>(nuint procAddress, T detour, HookBackend backend = HookBackend.Automatic) where T : Delegate;
+public unsafe Hook<T> HookFromAddress<T>(void* procAddress, T detour, HookBackend backend = HookBackend.Automatic) where T : Delegate;
+```
+
+Creates a hook at an explicitly provided memory address. The hook is **not** enabled until you call `.Enable()`.
+
+<ParamField path="procAddress" type="nint / nuint / void*" required>
+  The memory address of the function to hook. Accepts signed, unsigned, or raw pointer forms.
+</ParamField>
+
+<ParamField path="detour" type="T" required>
+  Your callback delegate with the same signature as the target function.
+</ParamField>
+
+<ParamField path="backend" type="HookBackend">
+  The hooking library to use. Defaults to `Automatic`.
+</ParamField>
+
+<ResponseField name="returns" type="Hook<T>">
+  The installed hook.
+</ResponseField>
+
+---
+
+### HookFromFunctionPointerVariable\<T\>
+
+```csharp
+public Hook<T> HookFromFunctionPointerVariable<T>(nint address, T detour) where T : Delegate;
+```
+
+Creates a hook by replacing the function pointer stored at `address` (a pointer-to-pointer) rather than patching the function body. Use this for virtual table or function-pointer-variable hooks.
+
+<ParamField path="address" type="nint" required>
+  The address of the function pointer variable to overwrite (not the function itself).
+</ParamField>
+
+<ParamField path="detour" type="T" required>
+  Your replacement callback delegate.
+</ParamField>
+
+<ResponseField name="returns" type="Hook<T>">
+  The installed hook.
+</ResponseField>
+
+---
+
+### HookFromImport\<T\>
+
+```csharp
+public Hook<T> HookFromImport<T>(
+    ProcessModule? module,
+    string moduleName,
+    string functionName,
+    uint hintOrOrdinal,
+    T detour)
+    where T : Delegate;
+```
+
+Hooks a function by rewriting the import table entry in the specified module. Use this to intercept calls to DLL exports without modifying the target DLL itself.
+
+<ParamField path="module" type="ProcessModule?">
+  The module whose import table to modify. Pass `null` to use the game's main module.
+</ParamField>
+
+<ParamField path="moduleName" type="string" required>
+  The DLL name as it appears in the import table, including extension (e.g. `"ws2_32.dll"`).
+</ParamField>
+
+<ParamField path="functionName" type="string" required>
+  The decorated export name of the function (e.g. `"send"`).
+</ParamField>
+
+<ParamField path="hintOrOrdinal" type="uint" required>
+  The import hint or ordinal. Pass `0` to leave unspecified.
+</ParamField>
+
+<ParamField path="detour" type="T" required>
+  Your replacement callback delegate.
+</ParamField>
+
+<ResponseField name="returns" type="Hook<T>">
+  The installed hook.
+</ResponseField>
+
+---
+
+### HookFromSymbol\<T\>
+
+```csharp
+public Hook<T> HookFromSymbol<T>(
+    string moduleName,
+    string exportName,
+    T detour,
+    HookBackend backend = HookBackend.Automatic)
+    where T : Delegate;
+```
+
+Resolves a function by module name and export name (via `GetProcAddress`) and creates a hook at that address.
+
+<ParamField path="moduleName" type="string" required>
+  The name of the loaded module (e.g. `"ws2_32.dll"`).
+</ParamField>
+
+<ParamField path="exportName" type="string" required>
+  The exported function name (e.g. `"send"`).
+</ParamField>
+
+<ParamField path="detour" type="T" required>
+  Your callback delegate.
+</ParamField>
+
+<ParamField path="backend" type="HookBackend">
+  The hooking library to use. Defaults to `Automatic`.
+</ParamField>
+
+<ResponseField name="returns" type="Hook<T>">
+  The installed hook.
+</ResponseField>
+
+## Example: hooking a game function using a signature
+
+```csharp
+using Dalamud.Hooking;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+using Dalamud.Utility.Signatures;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    // Dalamud initializes this hook automatically via InitializeFromAttributes
+    [Signature("48 89 5C 24 ?? 57 48 83 EC 20 48 8B D9 48 8B FA", DetourName = nameof(UseActionDetour))]
+    private Hook<UseActionDelegate>? useActionHook;
+
+    private delegate bool UseActionDelegate(
+        nint actionManager,
+        uint actionType,
+        uint actionId,
+        ulong targetId,
+        uint param,
+        uint useType,
+        int pvpSeq,
+        nint a8);
+
+    public MyPlugin(IGameInteropProvider gameInterop)
+    {
+        // Scans for [Signature] attributes and creates the hook
+        gameInterop.InitializeFromAttributes(this);
+
+        // Enable the hook so our detour is called
+        this.useActionHook?.Enable();
+    }
+
+    private bool UseActionDetour(
+        nint actionManager,
+        uint actionType,
+        uint actionId,
+        ulong targetId,
+        uint param,
+        uint useType,
+        int pvpSeq,
+        nint a8)
+    {
+        Plugin.Log.Debug($"Action used: type={actionType} id={actionId}");
+
+        // Call the original function
+        return this.useActionHook!.Original(
+            actionManager, actionType, actionId,
+            targetId, param, useType, pvpSeq, a8);
+    }
+
+    public void Dispose()
+    {
+        // Disable and dispose the hook to restore the original function
+        this.useActionHook?.Dispose();
+    }
+}
+```
+
+<Tip>
+  Use `InitializeFromAttributes` with `[Signature]` attributes for the cleanest hook setup. Reserve the manual `HookFromSignature` or `HookFromAddress` overloads for dynamic cases where the address is computed at runtime.
+</Tip>

@@ -1,0 +1,235 @@
+---
+title: "IFramework service reference"
+description: "Access the game's per-frame update loop, query timing information, and safely dispatch work onto the framework thread from background threads."
+---
+
+`IFramework` represents the native game client's Framework object. You use it to subscribe to the per-frame `Update` event, inspect timing data, and marshal work onto the game's main thread when you need to read or write game state safely.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IFramework framework)
+{
+    framework.Update += OnFrameworkUpdate;
+}
+```
+
+<Warning>
+  Never call `Task.Wait()` or access `.Result` on a task started inside a `Run` callback. Doing so deadlocks the game. Use `await` or switch to `RunOnFrameworkThread` instead.
+</Warning>
+
+## Events
+
+### Update
+
+```csharp
+public delegate void OnUpdateDelegate(IFramework framework);
+public event OnUpdateDelegate Update;
+```
+
+Fires once per game frame. Use this event for polling game state or driving animations. Unsubscribe when your plugin disposes.
+
+```csharp
+private void OnFrameworkUpdate(IFramework framework)
+{
+    // Runs every game frame on the framework thread
+    TimeSpan delta = framework.UpdateDelta;
+    // ... update logic ...
+}
+```
+
+## Properties
+
+<ResponseField name="LastUpdate" type="DateTime">
+  The local time at which the most recent framework update event fired.
+</ResponseField>
+
+<ResponseField name="LastUpdateUTC" type="DateTime">
+  The UTC time at which the most recent framework update event fired.
+</ResponseField>
+
+<ResponseField name="UpdateDelta" type="TimeSpan">
+  The elapsed time between the previous and current framework update. Use this to write frame-rate-independent logic.
+</ResponseField>
+
+<ResponseField name="IsInFrameworkUpdateThread" type="bool">
+  Returns `true` when the calling code is running on the game's framework update thread. Use this guard before accessing game state from async contexts.
+</ResponseField>
+
+<ResponseField name="IsFrameworkUnloading" type="bool">
+  Returns `true` when the game framework is in the process of unloading. Stop scheduling new work when this is set.
+</ResponseField>
+
+## Methods
+
+### GetTaskFactory
+
+```csharp
+public TaskFactory GetTaskFactory();
+```
+
+Returns a `TaskFactory` whose tasks execute during framework update events.
+
+<ResponseField name="returns" type="TaskFactory">
+  A `TaskFactory` that schedules tasks to run on the framework thread.
+</ResponseField>
+
+---
+
+### DelayTicks
+
+```csharp
+public Task DelayTicks(long numTicks, CancellationToken cancellationToken = default);
+```
+
+Returns a task that completes after the specified number of framework ticks. Continuations run on the framework thread by default.
+
+<ParamField path="numTicks" type="long" required>
+  Number of framework ticks to wait before completing the task.
+</ParamField>
+
+<ParamField path="cancellationToken" type="CancellationToken">
+  Token used to cancel the wait before it completes.
+</ParamField>
+
+<ResponseField name="returns" type="Task">
+  A task that resolves after the given number of ticks.
+</ResponseField>
+
+---
+
+### Run
+
+```csharp
+public Task Run(Action action, CancellationToken cancellationToken = default);
+public Task<T> Run<T>(Func<T> action, CancellationToken cancellationToken = default);
+public Task Run(Func<Task> action, CancellationToken cancellationToken = default);
+public Task<T> Run<T>(Func<Task<T>> action, CancellationToken cancellationToken = default);
+```
+
+Executes the given action immediately if called from the framework thread, or schedules it for the next framework update otherwise. Continuations and nested `await` calls stay on the framework thread via the current `TaskScheduler`.
+
+<Note>
+  If you need to start a new background task from inside a `Run` callback, use `Task.Run(...)` explicitly. Using `Task.Factory.StartNew` or `Task.ContinueWith` inside the callback will inherit the framework scheduler and may cause a deadlock.
+</Note>
+
+<ParamField path="action" type="Action / Func<T> / Func<Task> / Func<Task<T>>" required>
+  The delegate to invoke on the framework thread.
+</ParamField>
+
+<ParamField path="cancellationToken" type="CancellationToken">
+  Token used to cancel execution before it starts.
+</ParamField>
+
+<ResponseField name="returns" type="Task / Task<T>">
+  A task representing the pending or already-completed work.
+</ResponseField>
+
+---
+
+### RunOnFrameworkThread
+
+```csharp
+public Task<T> RunOnFrameworkThread<T>(Func<T> func);
+public Task RunOnFrameworkThread(Action action);
+```
+
+Executes the given action immediately when called from the framework thread; otherwise queues it for the next update. Unlike `Run`, continuations after `await` inside the callback do **not** remain on the framework thread — they fall back to the thread pool.
+
+<Tip>
+  Prefer `RunOnFrameworkThread` when you need to block-wait on the result with `.Wait()` or `.Result` from a background thread, because it avoids capturing the framework scheduler.
+</Tip>
+
+<Note>
+  The async overloads `RunOnFrameworkThread(Func<Task>)` and `RunOnFrameworkThread<T>(Func<Task<T>>)` are obsolete. Use `RunOnTick` instead.
+</Note>
+
+<ParamField path="func / action" type="Func<T> / Action" required>
+  The delegate to invoke on the framework thread.
+</ParamField>
+
+<ResponseField name="returns" type="Task / Task<T>">
+  A task representing the pending or already-completed work.
+</ResponseField>
+
+---
+
+### RunOnTick
+
+```csharp
+public Task RunOnTick(Action action, TimeSpan delay = default, int delayTicks = default, CancellationToken cancellationToken = default);
+public Task<T> RunOnTick<T>(Func<T> func, TimeSpan delay = default, int delayTicks = default, CancellationToken cancellationToken = default);
+public Task RunOnTick(Func<Task> func, TimeSpan delay = default, int delayTicks = default, CancellationToken cancellationToken = default);
+public Task<T> RunOnTick<T>(Func<Task<T>> func, TimeSpan delay = default, int delayTicks = default, CancellationToken cancellationToken = default);
+```
+
+Schedules work to run on an **upcoming** framework tick, optionally after a time or tick delay. Like `RunOnFrameworkThread`, continuations after `await` inside the callback fall back to the thread pool.
+
+<ParamField path="action / func" type="Action / Func<T> / Func<Task> / Func<Task<T>>" required>
+  The delegate to invoke on the framework thread.
+</ParamField>
+
+<ParamField path="delay" type="TimeSpan">
+  Minimum wall-clock time to wait before invoking the delegate. Ignored when `delayTicks` is non-zero.
+</ParamField>
+
+<ParamField path="delayTicks" type="int">
+  Number of framework ticks to skip before invoking the delegate. Takes precedence over `delay` when non-zero.
+</ParamField>
+
+<ParamField path="cancellationToken" type="CancellationToken">
+  Token used to cancel the scheduled work before it runs.
+</ParamField>
+
+<ResponseField name="returns" type="Task / Task<T>">
+  A task representing the pending work.
+</ResponseField>
+
+## Example: subscribing to the Update event
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IFramework framework;
+
+    public MyPlugin(IFramework framework)
+    {
+        this.framework = framework;
+        this.framework.Update += OnUpdate;
+    }
+
+    private void OnUpdate(IFramework fw)
+    {
+        // fw.UpdateDelta gives elapsed time since last frame
+        if (fw.UpdateDelta.TotalSeconds > 0.5)
+        {
+            // Do something every half-second
+        }
+    }
+
+    public void Dispose()
+    {
+        this.framework.Update -= OnUpdate;
+    }
+}
+```
+
+## Example: dispatching work from a background thread
+
+```csharp
+// From any background thread, run logic on the framework thread
+await framework.RunOnFrameworkThread(() =>
+{
+    // Safe to access game state here
+    var pos = localPlayer.Position;
+});
+
+// Schedule work two ticks in the future
+await framework.RunOnTick(() =>
+{
+    DoSomethingNextFrame();
+}, delayTicks: 2);
+```

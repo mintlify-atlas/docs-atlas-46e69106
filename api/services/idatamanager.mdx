@@ -1,0 +1,197 @@
+---
+title: "IDataManager service reference"
+description: "Read Excel sheets, load raw game files, and check file existence using Dalamud's Lumina-backed data access layer for FFXIV game data."
+---
+
+`IDataManager` provides access to the game's packaged data files through [Lumina](https://github.com/NotAdam/Lumina). You use it to query typed Excel sheet rows, load arbitrary file resources from the game's archives, and check whether specific files exist.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IDataManager dataManager)
+{
+    var sheet = dataManager.GetExcelSheet<Item>();
+}
+```
+
+## Properties
+
+<ResponseField name="Language" type="ClientLanguage">
+  The language used by default when fetching Excel sheets. Reflects the game client's configured display language.
+</ResponseField>
+
+<ResponseField name="GameData" type="GameData">
+  The raw Lumina `GameData` object. Provides low-level access to the game's entire file system. Prefer the typed helpers on `IDataManager` over accessing this directly.
+</ResponseField>
+
+<ResponseField name="Excel" type="ExcelModule">
+  The Lumina `ExcelModule` backing the Excel sheet helpers. Use `GetExcelSheet` and `GetSubrowExcelSheet` rather than calling into this directly.
+</ResponseField>
+
+<ResponseField name="HasModifiedGameDataFiles" type="bool">
+  `true` when a third-party tool (such as a modding framework) has modified the game's data files. Be cautious when reading game data in this state, as values may not match the unmodified game.
+</ResponseField>
+
+## Methods
+
+### GetExcelSheet\<T\>
+
+```csharp
+public ExcelSheet<T> GetExcelSheet<T>(
+    ClientLanguage? language = null,
+    string? name = null)
+    where T : struct, IExcelRow<T>;
+```
+
+Returns the typed Excel sheet for `T`. Use this for sheets whose rows do not contain subrows.
+
+<ParamField path="language" type="ClientLanguage?">
+  The language variant of the sheet to load. When `null`, the default client language is used.
+</ParamField>
+
+<ParamField path="name" type="string?">
+  An explicit sheet name override. Required for quest, dungeon, and cutscene sheets that do not match their type name. When `null`, the name is read from `T`'s `SheetAttribute`.
+</ParamField>
+
+<ResponseField name="returns" type="ExcelSheet<T>">
+  A typed sheet object you can index or enumerate.
+</ResponseField>
+
+The method throws if the sheet cannot be found or the type is mismatched:
+
+- `SheetNameEmptyException` — no name could be resolved.
+- `SheetAttributeMissingException` — `T` lacks a valid `[Sheet]` attribute.
+- `SheetNotFoundException` — the sheet does not exist in the game data.
+- `MismatchedColumnHashException` — the sheet's column layout has changed.
+- `UnsupportedLanguageException` — the requested language is not available.
+- `NotSupportedException` — the sheet variant is not `Default` (use `GetSubrowExcelSheet` for subrow sheets).
+
+---
+
+### GetSubrowExcelSheet\<T\>
+
+```csharp
+public SubrowExcelSheet<T> GetSubrowExcelSheet<T>(
+    ClientLanguage? language = null,
+    string? name = null)
+    where T : struct, IExcelSubrow<T>;
+```
+
+Returns the typed subrow Excel sheet for `T`. Use this for sheets whose rows contain indexed subrows (e.g. `Quest`).
+
+<ParamField path="language" type="ClientLanguage?">
+  The language variant of the sheet to load.
+</ParamField>
+
+<ParamField path="name" type="string?">
+  An explicit sheet name override. Required for quest, dungeon, and cutscene sheets.
+</ParamField>
+
+<ResponseField name="returns" type="SubrowExcelSheet<T>">
+  A typed subrow sheet object.
+</ResponseField>
+
+Throws the same exceptions as `GetExcelSheet`, plus `NotSupportedException` if the sheet variant is not `Subrows`.
+
+---
+
+### GetFile
+
+```csharp
+public FileResource? GetFile(string path);
+public T? GetFile<T>(string path) where T : FileResource;
+```
+
+Synchronously loads a file resource from the game's archives.
+
+<ParamField path="path" type="string" required>
+  A virtual path into the game's archive, e.g. `"ui/icon/000000/000001.tex"`.
+</ParamField>
+
+<ResponseField name="returns" type="FileResource? / T?">
+  The loaded resource, or `null` if the file was not found.
+</ResponseField>
+
+---
+
+### GetFileAsync\<T\>
+
+```csharp
+public Task<T> GetFileAsync<T>(string path, CancellationToken cancellationToken)
+    where T : FileResource;
+```
+
+Asynchronously loads a typed file resource.
+
+<ParamField path="path" type="string" required>
+  A virtual path into the game's archive.
+</ParamField>
+
+<ParamField path="cancellationToken" type="CancellationToken" required>
+  Token used to cancel the load operation.
+</ParamField>
+
+<ResponseField name="returns" type="Task<T>">
+  A task that resolves to the loaded resource.
+</ResponseField>
+
+---
+
+### FileExists
+
+```csharp
+public bool FileExists(string path);
+```
+
+Checks whether a file exists in the game's index without loading it.
+
+<ParamField path="path" type="string" required>
+  A virtual path into the game's archive.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the file exists in the game index; `false` otherwise.
+</ResponseField>
+
+## Example: reading an Excel sheet
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+using Lumina.Excel.Sheets;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    public MyPlugin(IDataManager dataManager)
+    {
+        // Read the Item sheet in the client's default language
+        var itemSheet = dataManager.GetExcelSheet<Item>();
+
+        // Look up item row 1 (gil)
+        if (itemSheet.TryGetRow(1, out var item))
+        {
+            Plugin.Log.Info($"Item name: {item.Name}");
+        }
+
+        // Iterate all items
+        foreach (var row in itemSheet)
+        {
+            Plugin.Log.Verbose($"[{row.RowId}] {row.Name}");
+        }
+
+        // Read the same sheet in English regardless of client language
+        var enSheet = dataManager.GetExcelSheet<Item>(Dalamud.Game.ClientLanguage.English);
+
+        // Check and load a raw texture file
+        const string texPath = "ui/icon/000000/000001.tex";
+        if (dataManager.FileExists(texPath))
+        {
+            var texFile = dataManager.GetFile<Lumina.Data.Files.TexFile>(texPath);
+        }
+    }
+}
+```
+
+<Note>
+  `GetExcelSheet` and `GetSubrowExcelSheet` return the same shared sheet instance on repeated calls with the same language. Caching the returned object yourself provides no additional performance benefit.
+</Note>

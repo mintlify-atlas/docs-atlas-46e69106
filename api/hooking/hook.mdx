@@ -1,0 +1,118 @@
+---
+title: "Hook<T> class reference"
+description: "Manage the lifecycle of a native FFXIV function hook — enable, disable, call the original, and dispose — using Dalamud's Hook<T> wrapper."
+---
+
+`Hook<T>` wraps a single native function hook installed in the FFXIV game process. You obtain instances from `IGameInteropProvider` (via `HookFromSignature`, `HookFromAddress`, or `InitializeFromAttributes`). Once you have a `Hook<T>`, you enable it to start intercepting calls, call `Original` to invoke the unmodified function from your detour, and `Dispose` to remove the hook entirely.
+
+`Hook<T>` is abstract — you never construct it directly. The concrete implementation is chosen by `IGameInteropProvider` based on the selected `HookBackend`.
+
+<Warning>
+  Always dispose hooks in your plugin's `Dispose()` method. An enabled hook left alive after your plugin unloads will write into memory that no longer belongs to you, causing the game to crash.
+</Warning>
+
+## Properties
+
+<ResponseField name="Address" type="IntPtr">
+  The memory address at which the hook is installed. Throws `ObjectDisposedException` if accessed after `Dispose()`.
+</ResponseField>
+
+<ResponseField name="Original" type="T">
+  A delegate that calls the real (unmodified) function. Use this inside your detour to preserve the original behavior. Throws `ObjectDisposedException` after `Dispose()`.
+</ResponseField>
+
+<ResponseField name="OriginalDisposeSafe" type="T">
+  Like `Original`, but safe to call even after `Dispose()`. Use this in cleanup code paths that may run after the hook has been removed.
+</ResponseField>
+
+<ResponseField name="IsEnabled" type="bool">
+  `true` when the hook is active and intercepting calls to the target function.
+</ResponseField>
+
+<ResponseField name="IsDisposed" type="bool">
+  `true` after `Dispose()` has been called.
+</ResponseField>
+
+<ResponseField name="BackendName" type="string">
+  The name of the hooking backend in use (e.g. `"Reloaded"` or `"MinHook"`).
+</ResponseField>
+
+## Methods
+
+### Enable
+
+```csharp
+public void Enable();
+```
+
+Starts intercepting calls to the hooked function. Your detour will be called in place of the original. Throws `ObjectDisposedException` if called after `Dispose()`.
+
+---
+
+### Disable
+
+```csharp
+public void Disable();
+```
+
+Stops intercepting calls. The original function resumes executing normally. The hook remains installed and can be re-enabled.
+
+---
+
+### Dispose
+
+```csharp
+public void Dispose();
+```
+
+Removes the hook entirely and releases all associated resources. After `Dispose()`, `IsDisposed` is `true` and `Original` will throw. Safe to call more than once.
+
+## Usage pattern
+
+The recommended pattern for managing hook lifetime is to create and enable in the constructor, and dispose in the plugin's `Dispose` method:
+
+```csharp
+using Dalamud.Hooking;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+using Dalamud.Utility.Signatures;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    // Delegate matching the native function's exact signature
+    private delegate void MyNativeFuncDelegate(nint self, uint param);
+
+    // Dalamud fills this in automatically via InitializeFromAttributes
+    [Signature("48 89 5C 24 ?? 57 48 83 EC 20 48 8B F9",
+               DetourName = nameof(MyNativeFuncDetour))]
+    private Hook<MyNativeFuncDelegate>? myHook;
+
+    public MyPlugin(IGameInteropProvider interopProvider)
+    {
+        interopProvider.InitializeFromAttributes(this);
+        this.myHook?.Enable();
+    }
+
+    private void MyNativeFuncDetour(nint self, uint param)
+    {
+        Plugin.Log.Debug($"MyNativeFunc called: self=0x{self:X} param={param}");
+
+        // Always call the original unless you have a specific reason not to
+        this.myHook!.Original(self, param);
+    }
+
+    public void Dispose()
+    {
+        // Disables and releases the hook
+        this.myHook?.Dispose();
+    }
+}
+```
+
+<Note>
+  You do not need to call `Disable()` before `Dispose()`. `Dispose()` handles disabling internally.
+</Note>
+
+<Tip>
+  Use the null-conditional operator (`?.`) when calling `Enable`, `Disable`, and `Dispose` on hooks declared as nullable (`Hook<T>?`). If the `[Signature]` attribute uses `Fallibility.Fallible` and the pattern is not found, the field will remain `null`.
+</Tip>

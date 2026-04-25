@@ -1,0 +1,223 @@
+---
+title: "ISigScanner service reference"
+description: "Scan the FFXIV game binary for byte patterns to locate native function addresses in the .text, .data, and .rdata memory sections."
+---
+
+`ISigScanner` lets you scan the game process's memory for byte-pattern signatures (IDA-style) to resolve the addresses of native game functions and static data. It is the underlying mechanism that `IGameInteropProvider` uses to locate hook targets, but you can also inject it directly when you need raw address resolution without installing a hook.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(ISigScanner sigScanner)
+{
+    nint addr = sigScanner.ScanText("48 89 5C 24 ?? 57 48 83 EC 20 48 8B D9");
+}
+```
+
+<Note>
+  In most cases you should prefer using `IGameInteropProvider.InitializeFromAttributes` with the `[Signature]` attribute rather than calling `ISigScanner` directly. Direct use is appropriate when you need the address but do not want to install a hook.
+</Note>
+
+## Properties
+
+<ResponseField name="IsCopy" type="bool">
+  `true` when the scanner is operating on a copy of the module in memory rather than the live module. Scanning a copy is safer but may not reflect runtime patches.
+</ResponseField>
+
+<ResponseField name="SearchBase" type="nint">
+  The base address of the search area. When working on a copy, this is the copy's base address.
+</ResponseField>
+
+<ResponseField name="TextSectionBase" type="nint">
+  Base address of the `.text` (executable code) section.
+</ResponseField>
+
+<ResponseField name="TextSectionOffset" type="long">
+  Offset of the `.text` section from the module base.
+</ResponseField>
+
+<ResponseField name="TextSectionSize" type="int">
+  Size in bytes of the `.text` section.
+</ResponseField>
+
+<ResponseField name="DataSectionBase" type="nint">
+  Base address of the `.data` section.
+</ResponseField>
+
+<ResponseField name="DataSectionOffset" type="long">
+  Offset of the `.data` section from the module base.
+</ResponseField>
+
+<ResponseField name="DataSectionSize" type="int">
+  Size in bytes of the `.data` section.
+</ResponseField>
+
+<ResponseField name="RDataSectionBase" type="nint">
+  Base address of the `.rdata` (read-only data) section.
+</ResponseField>
+
+<ResponseField name="RDataSectionOffset" type="long">
+  Offset of the `.rdata` section from the module base.
+</ResponseField>
+
+<ResponseField name="RDataSectionSize" type="int">
+  Size in bytes of the `.rdata` section.
+</ResponseField>
+
+<ResponseField name="Module" type="ProcessModule">
+  The `ProcessModule` on which scans are performed.
+</ResponseField>
+
+## Methods
+
+### ScanText
+
+```csharp
+public nint ScanText(string signature);
+public bool TryScanText(string signature, out nint result);
+```
+
+Scans the `.text` section for the given byte pattern and returns the matched address. The `Try` variant returns `false` instead of throwing if the signature is not found.
+
+<ParamField path="signature" type="string" required>
+  An IDA-style byte pattern. Use `??` as a wildcard for unknown bytes, e.g. `"E8 ?? ?? ?? ?? 48 8B 5C"`.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The memory address of the first match.
+</ResponseField>
+
+---
+
+### ScanAllText
+
+```csharp
+public nint[] ScanAllText(string signature);
+public IEnumerable<nint> ScanAllText(string signature, CancellationToken cancellationToken);
+```
+
+Finds all matches of the given pattern in the `.text` section. Use the overload with `CancellationToken` for long-running scans that need to be cancellable.
+
+<ParamField path="signature" type="string" required>
+  The byte pattern to match.
+</ParamField>
+
+<ResponseField name="returns" type="nint[] / IEnumerable<nint>">
+  All matching addresses.
+</ResponseField>
+
+---
+
+### ScanData
+
+```csharp
+public nint ScanData(string signature);
+public bool TryScanData(string signature, out nint result);
+```
+
+Scans the `.data` section for the given pattern.
+
+<ParamField path="signature" type="string" required>
+  The byte pattern to match.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The matched address.
+</ResponseField>
+
+---
+
+### ScanModule
+
+```csharp
+public nint ScanModule(string signature);
+public bool TryScanModule(string signature, out nint result);
+```
+
+Scans the entire module (all sections) for the given pattern. Use this when you are unsure which section contains the target.
+
+<ParamField path="signature" type="string" required>
+  The byte pattern to match.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The matched address.
+</ResponseField>
+
+---
+
+### GetStaticAddressFromSig
+
+```csharp
+public nint GetStaticAddressFromSig(string signature, int offset = 0);
+public bool TryGetStaticAddressFromSig(string signature, out nint result, int offset = 0);
+```
+
+Resolves a static `.data` address referenced by a `.text` function. Place your cursor in IDA on the instruction that references the static address and generate the signature from there.
+
+<ParamField path="signature" type="string" required>
+  The byte pattern of the function referencing the static data.
+</ParamField>
+
+<ParamField path="offset" type="int">
+  Offset from the function start to the instruction that contains the reference. Defaults to `0`.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The resolved static memory address.
+</ResponseField>
+
+---
+
+### ResolveRelativeAddress
+
+```csharp
+public nint ResolveRelativeAddress(nint nextInstAddr, int relOffset);
+```
+
+Computes an absolute address from a relative offset (RVA). Used when manually parsing call/jump instructions.
+
+<ParamField path="nextInstAddr" type="nint" required>
+  The address of the instruction immediately following the one with the relative offset.
+</ParamField>
+
+<ParamField path="relOffset" type="int" required>
+  The relative 32-bit offset extracted from the instruction.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  The absolute address the relative offset resolves to.
+</ResponseField>
+
+## Example: locating a function address
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly nint targetFunctionAddress;
+
+    public MyPlugin(ISigScanner sigScanner)
+    {
+        // Scan the .text section for a known byte pattern
+        if (sigScanner.TryScanText(
+            "48 89 5C 24 ?? 57 48 83 EC 20 48 8B D9 48 8B FA",
+            out this.targetFunctionAddress))
+        {
+            Plugin.Log.Information($"Found function at 0x{this.targetFunctionAddress:X}");
+        }
+        else
+        {
+            Plugin.Log.Warning("Signature not found — game may have been updated.");
+        }
+    }
+
+    public void Dispose() { }
+}
+```
+
+<Tip>
+  Use the `Try*` variants (`TryScanText`, `TryScanData`, `TryScanModule`) in production code. They return `false` gracefully when a signature does not match rather than throwing an exception, which lets your plugin degrade gracefully after a game update.
+</Tip>

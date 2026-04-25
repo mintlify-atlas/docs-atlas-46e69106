@@ -1,0 +1,397 @@
+---
+title: "ITextureProvider service reference"
+description: "Load, create, and share textures from game archives, the filesystem, or raw bytes for rendering in ImGui-based Dalamud plugin windows."
+---
+
+`ITextureProvider` is the entry point for all texture work in Dalamud plugins. It produces two kinds of objects:
+
+- **`IDalamudTextureWrap`** — an owned texture you must `Dispose` after use. Returned by all `Create*` methods.
+- **`ISharedImmediateTexture`** — a cached, shared texture handle returned by `Get*` methods. You do not need to call `Dispose` on this object unless you explicitly called `RentAsync` to produce an owned reference.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(ITextureProvider textureProvider)
+{
+    var icon = textureProvider.GetFromGameIcon(new GameIconLookup(1));
+}
+```
+
+<Note>
+  `Get*` methods return shared textures that are loaded lazily. The texture may not be ready on the same frame you call `GetFromGame` or `GetFromGameIcon`. Use `ISharedImmediateTexture.TryGetWrap` to safely obtain a `IDalamudTextureWrap` that remains valid for the current frame.
+</Note>
+
+## Creating textures (owned, must be disposed)
+
+### CreateEmpty
+
+```csharp
+public IDalamudTextureWrap CreateEmpty(
+    RawImageSpecification specs,
+    bool cpuRead,
+    bool cpuWrite,
+    string? debugName = null);
+```
+
+Creates a blank GPU texture with the given specifications.
+
+<ParamField path="specs" type="RawImageSpecification" required>
+  Width, height, DXGI format, and other layout parameters.
+</ParamField>
+
+<ParamField path="cpuRead" type="bool" required>
+  Enable CPU read access. Disables GPU read access when set.
+</ParamField>
+
+<ParamField path="cpuWrite" type="bool" required>
+  Enable CPU write access. Disables GPU write access when set.
+</ParamField>
+
+<ParamField path="debugName" type="string?">
+  A name shown in debug tools to help identify texture leaks.
+</ParamField>
+
+<ResponseField name="returns" type="IDalamudTextureWrap">
+  A new empty texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateDrawListTexture
+
+```csharp
+public IDrawListTextureWrap CreateDrawListTexture(string? debugName = null);
+```
+
+Creates a texture that can be rendered into from an `ImDrawList` or `ImDrawData`. No GPU resource is allocated until you set a non-zero `Size`.
+
+<ParamField path="debugName" type="string?">
+  A name shown in debug tools.
+</ParamField>
+
+<ResponseField name="returns" type="IDrawListTextureWrap">
+  A new draw-list texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateFromImageAsync
+
+```csharp
+public Task<IDalamudTextureWrap> CreateFromImageAsync(
+    ReadOnlyMemory<byte> bytes,
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+
+public Task<IDalamudTextureWrap> CreateFromImageAsync(
+    Stream stream,
+    bool leaveOpen = false,
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+```
+
+Loads a texture from encoded image bytes or a stream. Supports `.tex` and common image formats such as `.png` and `.jpg`.
+
+<ParamField path="bytes" type="ReadOnlyMemory<byte>">
+  The encoded image data.
+</ParamField>
+
+<ParamField path="stream" type="Stream">
+  A stream of encoded image data.
+</ParamField>
+
+<ParamField path="leaveOpen" type="bool">
+  When using the stream overload, whether to leave the stream open after the task completes.
+</ParamField>
+
+<ParamField path="debugName" type="string?">
+  A name shown in debug tools.
+</ParamField>
+
+<ParamField path="cancellationToken" type="CancellationToken">
+  Token to cancel the load operation.
+</ParamField>
+
+<ResponseField name="returns" type="Task<IDalamudTextureWrap>">
+  The loaded texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateFromRaw / CreateFromRawAsync
+
+```csharp
+public IDalamudTextureWrap CreateFromRaw(
+    RawImageSpecification specs,
+    ReadOnlySpan<byte> bytes,
+    string? debugName = null);
+
+public Task<IDalamudTextureWrap> CreateFromRawAsync(
+    RawImageSpecification specs,
+    ReadOnlyMemory<byte> bytes,
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+
+public Task<IDalamudTextureWrap> CreateFromRawAsync(
+    RawImageSpecification specs,
+    Stream stream,
+    bool leaveOpen = false,
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+```
+
+Loads a texture from raw, unencoded pixel data.
+
+<ParamField path="specs" type="RawImageSpecification" required>
+  Describes the pixel layout: width, height, and DXGI format.
+</ParamField>
+
+<ParamField path="bytes" type="ReadOnlySpan<byte> / ReadOnlyMemory<byte>" required>
+  The raw pixel bytes.
+</ParamField>
+
+<ResponseField name="returns" type="IDalamudTextureWrap / Task<IDalamudTextureWrap>">
+  The loaded texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateFromTexFile / CreateFromTexFileAsync
+
+```csharp
+public IDalamudTextureWrap CreateFromTexFile(TexFile file);
+
+public Task<IDalamudTextureWrap> CreateFromTexFileAsync(
+    TexFile file,
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+```
+
+Creates a texture from a Lumina `TexFile` that you have already loaded (e.g. via `IDataManager.GetFile<TexFile>`).
+
+<ParamField path="file" type="TexFile" required>
+  A Lumina texture file already loaded from game data.
+</ParamField>
+
+<ResponseField name="returns" type="IDalamudTextureWrap / Task<IDalamudTextureWrap>">
+  The loaded texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateFromExistingTextureAsync
+
+```csharp
+public Task<IDalamudTextureWrap> CreateFromExistingTextureAsync(
+    IDalamudTextureWrap wrap,
+    TextureModificationArgs args = default,
+    bool leaveWrapOpen = false,
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+```
+
+Copies and optionally crops or converts an existing `IDalamudTextureWrap`.
+
+<ParamField path="wrap" type="IDalamudTextureWrap" required>
+  The source texture. May be disposed immediately after the call returns.
+</ParamField>
+
+<ParamField path="args" type="TextureModificationArgs">
+  Optional crop region and pixel format conversion.
+</ParamField>
+
+<ParamField path="leaveWrapOpen" type="bool">
+  When `false` (default), `wrap` is disposed when the returned task completes.
+</ParamField>
+
+<ResponseField name="returns" type="Task<IDalamudTextureWrap>">
+  The copied texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateFromClipboardAsync
+
+```csharp
+public Task<IDalamudTextureWrap> CreateFromClipboardAsync(
+    string? debugName = null,
+    CancellationToken cancellationToken = default);
+```
+
+Creates a texture from the system clipboard image. Use `HasClipboardImage()` first to check whether an image is available.
+
+<ResponseField name="returns" type="Task<IDalamudTextureWrap>">
+  The clipboard image as a texture. Dispose after use.
+</ResponseField>
+
+---
+
+### CreateTextureFromSeString
+
+```csharp
+public IDalamudTextureWrap CreateTextureFromSeString(
+    ReadOnlySpan<byte> text,
+    scoped in SeStringDrawParams drawParams = default,
+    string? debugName = null);
+```
+
+Renders an `SeString` into a new texture. Must be called from the main thread.
+
+<ParamField path="text" type="ReadOnlySpan<byte>" required>
+  The SeString payload to render.
+</ParamField>
+
+<ParamField path="drawParams" type="SeStringDrawParams">
+  Font, scale, and color parameters for rendering.
+</ParamField>
+
+<ResponseField name="returns" type="IDalamudTextureWrap">
+  The rendered texture. Dispose after use.
+</ResponseField>
+
+## Getting shared textures (no disposal needed)
+
+### GetFromGame
+
+```csharp
+public ISharedImmediateTexture GetFromGame(string path);
+```
+
+Returns a shared texture for a file inside the game's archives. Subject to texture substitution from modding tools.
+
+<ParamField path="path" type="string" required>
+  A virtual archive path, e.g. `"ui/icon/000000/000001.tex"`.
+</ParamField>
+
+<ResponseField name="returns" type="ISharedImmediateTexture">
+  A shared texture handle. No disposal required.
+</ResponseField>
+
+---
+
+### GetFromGameIcon / TryGetFromGameIcon
+
+```csharp
+public ISharedImmediateTexture GetFromGameIcon(in GameIconLookup lookup);
+public bool TryGetFromGameIcon(in GameIconLookup lookup, out ISharedImmediateTexture? texture);
+```
+
+Returns a shared texture for an in-game icon by its specifier. Subject to texture substitution.
+
+<ParamField path="lookup" type="GameIconLookup" required>
+  Icon specifier containing the icon ID, HQ flag, and language variant.
+</ParamField>
+
+<ResponseField name="returns" type="ISharedImmediateTexture">
+  A shared texture handle (throwing overload). No disposal required.
+</ResponseField>
+
+---
+
+### GetFromFile / GetFromFileAbsolute
+
+```csharp
+public ISharedImmediateTexture GetFromFile(string path);
+public ISharedImmediateTexture GetFromFile(FileInfo file);
+public ISharedImmediateTexture GetFromFileAbsolute(string fullPath);
+```
+
+Returns a shared texture for an image file on the local filesystem.
+
+<ParamField path="path / file / fullPath" type="string / FileInfo" required>
+  Path to the image file. `GetFromFileAbsolute` requires a full absolute path.
+</ParamField>
+
+<ResponseField name="returns" type="ISharedImmediateTexture">
+  A shared texture handle. No disposal required.
+</ResponseField>
+
+---
+
+### GetFromManifestResource
+
+```csharp
+public ISharedImmediateTexture GetFromManifestResource(Assembly assembly, string name);
+```
+
+Returns a shared texture loaded from an embedded assembly manifest resource.
+
+<ParamField path="assembly" type="Assembly" required>
+  The assembly containing the embedded resource.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  The case-sensitive manifest resource name.
+</ParamField>
+
+<ResponseField name="returns" type="ISharedImmediateTexture">
+  A shared texture handle. No disposal required.
+</ResponseField>
+
+## Utility methods
+
+<ResponseField name="GetIconPath(in GameIconLookup)" type="string">
+  Returns the archive path for a game icon. Throws `FileNotFoundException` if not found.
+</ResponseField>
+
+<ResponseField name="TryGetIconPath(in GameIconLookup, out string?)" type="bool">
+  Non-throwing version of `GetIconPath`. Sets `path` and returns `true` on success.
+</ResponseField>
+
+<ResponseField name="HasClipboardImage()" type="bool">
+  Returns `true` when the clipboard contains an image that `CreateFromClipboardAsync` can read.
+</ResponseField>
+
+<ResponseField name="IsDxgiFormatSupported(int)" type="bool">
+  Returns `true` when the system's GPU supports the given DXGI format for use with `RawImageSpecification.DxgiFormat`.
+</ResponseField>
+
+<ResponseField name="GetSupportedImageDecoderInfos()" type="IEnumerable<IBitmapCodecInfo>">
+  Returns information about all bitmap formats that the `CreateFromImage*` and `GetFromFile` methods can decode.
+</ResponseField>
+
+<ResponseField name="ConvertToKernelTexture(IDalamudTextureWrap, bool)" type="nint">
+  Converts a `IDalamudTextureWrap` into a native `FFXIVClientStructs.FFXIV.Client.Graphics.Kernel.Texture` pointer for use in game UI element replacement.
+</ResponseField>
+
+## Example: loading and rendering a game icon
+
+```csharp
+using Dalamud.Interface.Textures;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+using ImGuiNET;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly ITextureProvider textureProvider;
+
+    public MyPlugin(ITextureProvider textureProvider)
+    {
+        this.textureProvider = textureProvider;
+    }
+
+    public void DrawWindow()
+    {
+        // Get icon #1 (Gil icon) as a shared texture — no disposal needed
+        var icon = textureProvider.GetFromGameIcon(new GameIconLookup(1));
+
+        // TryGetWrap is safe to call every frame; returns null if not yet loaded
+        if (icon.TryGetWrap(out var wrap, out _))
+        {
+            ImGui.Image(wrap.ImGuiHandle, new System.Numerics.Vector2(32, 32));
+        }
+
+        // Load a texture from a game archive path
+        var archiveTex = textureProvider.GetFromGame("ui/icon/000000/000002.tex");
+        if (archiveTex.TryGetWrap(out var archiveWrap, out _))
+        {
+            ImGui.Image(archiveWrap.ImGuiHandle, new System.Numerics.Vector2(32, 32));
+        }
+    }
+}
+```
+
+<Tip>
+  Do not cache `ISharedImmediateTexture` objects long-term. The service manages the cache internally and the performance gain from caching on your side is negligible.
+</Tip>

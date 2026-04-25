@@ -1,0 +1,136 @@
+---
+title: 'The Dalamud plugin system'
+description: 'Learn how Dalamud discovers, loads, and isolates plugins using IDalamudPlugin, plugin manifests, load reasons, and the repository system.'
+---
+
+Dalamud turns FFXIV into an extensible platform by injecting a managed .NET runtime into the game process and exposing a stable plugin API on top of it. Every plugin is a self-contained .NET assembly that Dalamud loads, wires up with services, and unloads on demand — without restarting the game.
+
+## The IDalamudPlugin interface
+
+Every plugin must implement the `IDalamudPlugin` interface. Because `IDalamudPlugin` extends `IDisposable`, your plugin class is also responsible for releasing resources when Dalamud unloads it.
+
+```csharp
+namespace Dalamud.Plugin;
+
+public interface IDalamudPlugin : IDisposable
+{
+}
+```
+
+The minimal plugin implementation looks like this:
+
+```csharp
+using Dalamud.Plugin;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    public MyPlugin()
+    {
+        // Initialize your plugin here.
+        // Services are injected through the constructor.
+    }
+
+    public void Dispose()
+    {
+        // Release all resources here.
+        // Called automatically when the plugin is unloaded.
+    }
+}
+```
+
+<Note>
+The `Dispose` method is called by Dalamud every time your plugin is unloaded — on game exit, during a reload, or when the user disables it in the plugin installer. Always unsubscribe from events, stop background tasks, and release unmanaged resources inside `Dispose`. Failing to do so causes memory leaks and can destabilize the game process.
+</Note>
+
+## How plugins are loaded
+
+Dalamud resolves and loads plugins through its `PluginManager`. Each plugin runs inside its own `AssemblyLoadContext`, which provides namespace isolation — two plugins can reference different versions of the same library without conflict.
+
+<Steps>
+  <Step title="Manifest discovery">
+    Dalamud downloads and validates a plugin manifest (`.json`) from a configured repository. The manifest declares the plugin's internal name, version, author, API level, and download URL.
+  </Step>
+  <Step title="Assembly download and validation">
+    The plugin archive is fetched and verified. `PluginValidator` checks that the assembly targets a compatible Dalamud API level before loading proceeds.
+  </Step>
+  <Step title="AssemblyLoadContext creation">
+    Dalamud creates an isolated `AssemblyLoadContext` for the plugin. This context resolves shared Dalamud assemblies from the host but keeps plugin-private assemblies separate.
+  </Step>
+  <Step title="Service scope creation">
+    A plugin-scoped IoC container is created. Services marked with `[PluginInterface]` (like `IDalamudPluginInterface`) are registered in this scope, while global services (like `IFramework`) are inherited from the root container.
+  </Step>
+  <Step title="Constructor injection">
+    Dalamud instantiates your plugin class by resolving constructor parameters from the service container. The constructor is the entry point for your plugin's initialization logic.
+  </Step>
+</Steps>
+
+## Plugin load reasons
+
+When your plugin is constructed, the `IDalamudPluginInterface.Reason` property tells you why Dalamud loaded it this session. You can use this to skip first-run setup or display update notices.
+
+```csharp
+using Dalamud.Plugin;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        switch (pluginInterface.Reason)
+        {
+            case PluginLoadReason.Boot:
+                // Loaded because the game started or Dalamud was reinjected.
+                break;
+            case PluginLoadReason.Installer:
+                // User just installed the plugin for the first time.
+                break;
+            case PluginLoadReason.Update:
+                // Plugin was just updated to a new version.
+                break;
+            case PluginLoadReason.Reload:
+                // User or Dalamud triggered an explicit reload.
+                break;
+        }
+    }
+
+    public void Dispose() { }
+}
+```
+
+`PluginLoadReason` is a `[Flags]` enum — a future load may combine multiple reasons, so use `HasFlag` when checking for specific values in production code.
+
+## Plugin manifests and the repository system
+
+Dalamud discovers installable plugins through **plugin repositories**. Each repository serves a JSON index of available plugins. The official repository is the Dalamud Plugin Repository (DDLR), but users can add third-party repositories in Dalamud settings.
+
+Each entry in the index points to a **plugin manifest**, which contains:
+
+<AccordionGroup>
+  <Accordion title="Identity fields">
+    - `InternalName` — unique machine identifier (no spaces, used for config directories)
+    - `Name` — human-readable display name
+    - `Author` — plugin author name
+    - `Description` — short description shown in the plugin installer
+  </Accordion>
+  <Accordion title="Version and compatibility">
+    - `AssemblyVersion` — the plugin's current version
+    - `DalamudApiLevel` — the Dalamud API version this plugin targets; mismatches block loading
+    - `TestingAssemblyVersion` — optional testing/beta version
+  </Accordion>
+  <Accordion title="Runtime metadata">
+    - `SourceRepository` — the URL of the repository that provided this plugin
+    - `IsDev` — whether this is a developer (sideloaded) plugin
+    - `IsTesting` — whether the user opted into the testing release
+  </Accordion>
+</AccordionGroup>
+
+You can access your plugin's manifest at runtime through `IDalamudPluginInterface.Manifest`.
+
+## Plugin isolation
+
+Each plugin's `AssemblyLoadContext` ensures that:
+
+- Plugins cannot directly call into each other's private code at the assembly level.
+- Private NuGet packages used by one plugin do not conflict with other plugins using different versions of the same package.
+- Unloading a plugin tears down its context cleanly without affecting other plugins.
+
+Cross-plugin communication uses Dalamud's **IPC system** (`ICallGateProvider` / `ICallGateSubscriber`) rather than direct assembly references. You can also share small data payloads between plugins using `IDalamudPluginInterface.GetOrCreateData` and `TryGetData`.

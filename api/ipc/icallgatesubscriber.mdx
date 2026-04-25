@@ -1,0 +1,207 @@
+---
+title: "ICallGateSubscriber interface reference"
+description: "Reference for ICallGateSubscriber, the client side of Dalamud's IPC system for invoking remote plugin functions and subscribing to messages."
+---
+
+`ICallGateSubscriber` is the client (subscriber) side of Dalamud's inter-plugin communication (IPC) system. Use it to invoke actions and functions published by another plugin's `ICallGateProvider`, and to subscribe to that plugin's broadcast messages.
+
+You obtain an `ICallGateSubscriber` instance from `IDalamudPluginInterface.GetIpcSubscriber<...>(name)`. The name must match the channel name registered by the provider plugin.
+
+<Warning>
+The provider plugin may not be installed, or it may not have registered its functions yet. Always wrap `InvokeAction` and `InvokeFunc` calls in a `try-catch` that handles at minimum `IpcNotReadyError`. Failing to do so will cause your plugin to throw unhandled exceptions if the provider is absent or unloaded.
+</Warning>
+
+---
+
+## Generic type parameters
+
+`ICallGateSubscriber` uses the same generic shape as `ICallGateProvider`. The last type parameter is the return type (`TRet`); the preceding ones (`T1`–`T8`) are input argument types. You must use the exact same type parameters as the provider, or you will receive an `IpcTypeMismatchError` at invocation time.
+
+| Interface | Signature |
+|---|---|
+| `ICallGateSubscriber<TRet>` | No input args, returns `TRet` |
+| `ICallGateSubscriber<T1, TRet>` | One input arg, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, TRet>` | Two input args, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, T3, TRet>` | Three input args, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, T3, T4, TRet>` | Four input args, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, T3, T4, T5, TRet>` | Five input args, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, T3, T4, T5, T6, TRet>` | Six input args, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, T3, T4, T5, T6, T7, TRet>` | Seven input args, returns `TRet` |
+| `ICallGateSubscriber<T1, T2, T3, T4, T5, T6, T7, T8, TRet>` | Eight input args, returns `TRet` |
+
+---
+
+## Properties
+
+<ResponseField name="HasAction" type="bool">
+  `true` when the provider has registered an action on this channel via `RegisterAction`. Check this before calling `InvokeAction` if you want to avoid catching `IpcNotReadyError`.
+</ResponseField>
+
+<ResponseField name="HasFunction" type="bool">
+  `true` when the provider has registered a func on this channel via `RegisterFunc`. Check this before calling `InvokeFunc` if you want to avoid catching `IpcNotReadyError`.
+</ResponseField>
+
+---
+
+## Methods
+
+### Subscribe
+
+```csharp
+public void Subscribe(Action action);
+// or with arguments:
+public void Subscribe(Action<T1> action);
+public void Subscribe(Action<T1, T2> action);
+// ... up to Action<T1, T2, T3, T4, T5, T6, T7, T8>
+```
+
+Registers a local delegate to be called when the provider calls `SendMessage` on this channel. Multiple subscribers can register on the same channel; all are called sequentially in registration order on the provider's thread.
+
+The delegate you pass must be the same instance that you later pass to `Unsubscribe`. Store it in a field if necessary.
+
+### Unsubscribe
+
+```csharp
+public void Unsubscribe(Action action);
+// or with arguments:
+public void Unsubscribe(Action<T1> action);
+public void Unsubscribe(Action<T1, T2> action);
+// ... up to Action<T1, T2, T3, T4, T5, T6, T7, T8>
+```
+
+Removes a delegate previously registered with `Subscribe`. You must pass the exact same delegate instance — not a new lambda with the same body. Always call this in your plugin's `Dispose` method to prevent calls into a disposed plugin.
+
+### InvokeAction
+
+```csharp
+public void InvokeAction();
+// or with arguments:
+public void InvokeAction(T1 arg1);
+public void InvokeAction(T1 arg1, T2 arg2);
+// ... up to InvokeAction(T1, T2, T3, T4, T5, T6, T7, T8)
+```
+
+Calls the action registered by the provider via `RegisterAction`. The call is synchronous — it runs on your thread and blocks until the provider's action returns.
+
+Throws `IpcNotReadyError` if the provider has not yet registered an action, or has unregistered it. Throws `IpcTypeMismatchError` if the generic type parameters do not match the provider's registered delegate.
+
+### InvokeFunc
+
+```csharp
+public TRet InvokeFunc();
+// or with arguments:
+public TRet InvokeFunc(T1 arg1);
+public TRet InvokeFunc(T1 arg1, T2 arg2);
+// ... up to InvokeFunc(T1, T2, T3, T4, T5, T6, T7, T8)
+```
+
+Calls the func registered by the provider via `RegisterFunc` and returns its result. Like `InvokeAction`, this is synchronous.
+
+Throws `IpcNotReadyError` if the provider has not yet registered a func. Throws `IpcTypeMismatchError` on a generic type mismatch.
+
+---
+
+## Exceptions
+
+| Exception | When thrown |
+|---|---|
+| `IpcNotReadyError` | `InvokeAction` or `InvokeFunc` is called but the provider has not registered a delegate, or has already unregistered it. |
+| `IpcTypeMismatchError` | The subscriber's generic type parameters do not match the provider's registered delegate types. |
+
+---
+
+## Handling a missing provider
+
+The provider plugin may not be installed, or it may load after your plugin. Use `HasAction` / `HasFunction` to check availability before invoking, or catch exceptions gracefully:
+
+```csharp
+// Option 1: check availability first
+if (subscriber.HasFunction)
+{
+    var result = subscriber.InvokeFunc();
+}
+
+// Option 2: catch the error
+try
+{
+    var result = subscriber.InvokeFunc();
+}
+catch (IpcNotReadyError)
+{
+    // Provider is not installed or not yet ready
+}
+```
+
+---
+
+## Complete example
+
+The following example shows a plugin subscribing to a message channel and invoking a remote function, with proper error handling and cleanup.
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Ipc;
+using Dalamud.Plugin.Ipc.Exceptions;
+
+public sealed class MyConsumerPlugin : IDalamudPlugin
+{
+    // Subscriber for a func that returns the provider's version string
+    private readonly ICallGateSubscriber<string> versionSubscriber;
+
+    // Subscriber for a message channel carrying the name of the changed setting
+    private readonly ICallGateSubscriber<string, object> configChangedSubscriber;
+
+    // Store the delegate so we can unsubscribe the exact same instance
+    private readonly Action<string> onConfigChanged;
+
+    public MyConsumerPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        versionSubscriber = pluginInterface.GetIpcSubscriber<string>(
+            "MyPlugin.GetVersion");
+
+        configChangedSubscriber = pluginInterface.GetIpcSubscriber<string, object>(
+            "MyPlugin.ConfigChanged");
+
+        onConfigChanged = OnConfigChanged;
+        configChangedSubscriber.Subscribe(onConfigChanged);
+    }
+
+    public string? TryGetProviderVersion()
+    {
+        try
+        {
+            return versionSubscriber.InvokeFunc();
+        }
+        catch (IpcNotReadyError)
+        {
+            // MyPlugin is not installed or not yet initialized
+            return null;
+        }
+        catch (IpcTypeMismatchError)
+        {
+            // Type mismatch — likely a version incompatibility with MyPlugin
+            return null;
+        }
+    }
+
+    private void OnConfigChanged(string changedSetting)
+    {
+        // React to the provider's config change notification
+        // This runs on the provider's thread, so keep it fast
+    }
+
+    public void Dispose()
+    {
+        // Always unsubscribe to prevent calls into a disposed plugin
+        configChangedSubscriber.Unsubscribe(onConfigChanged);
+    }
+}
+```
+
+<Warning>
+Subscribe and unsubscribe using the **same delegate instance**. If you subscribe with a lambda (`Subscribe(() => ...)`) and then attempt to unsubscribe with a different lambda, the original subscription will remain active and your plugin will continue to be called after disposal.
+</Warning>
+
+<Note>
+IPC calls are synchronous and run on the calling thread. If the provider's handler is expensive, consider offloading work to a background task inside the handler rather than blocking the caller.
+</Note>

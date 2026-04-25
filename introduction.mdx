@@ -1,0 +1,49 @@
+---
+title: "What is Dalamud?"
+description: "Dalamud is a plugin framework for Final Fantasy XIV that gives developers access to game data, native interop, and a rich service API."
+---
+
+Dalamud is an open-source plugin development framework for Final Fantasy XIV. It is injected into the game process by [XIVLauncher](https://goatcorp.github.io/) and exposes a structured C# API that lets you read game state, respond to in-game events, render custom ImGui windows, register chat commands, and interoperate with the game's native code — all without modifying game files on disk.
+
+<Note>
+  If you are an end user who wants to use Dalamud plugins, you do not need to build anything. Download [XIVLauncher](https://goatcorp.github.io/) and it will manage Dalamud for you automatically.
+</Note>
+
+## How Dalamud works
+
+Dalamud is loaded through a multi-stage pipeline:
+
+1. **Dalamud.Injector.Boot** (C++) uses `hostfxr` to load the .NET runtime into the launcher process.
+2. **Dalamud.Injector** (C#) performs DLL injection into the running FFXIV process.
+3. **Dalamud.Boot** (C++) loads the .NET runtime into the game process and initialises the core framework.
+4. **Dalamud** (C#) starts up the plugin system, service container, and all game bindings.
+
+Once running, Dalamud manages the lifetime of every installed plugin. Each plugin is a .NET assembly that implements the `IDalamudPlugin` interface. Dalamud loads plugins in isolated `AssemblyLoadContext`s and wires up services through its dependency injection container.
+
+## What plugins can do
+
+The Dalamud service API covers a broad surface of the game:
+
+- **Chat** — print messages, intercept incoming chat, and register `/slash` commands via `IChatGui` and `ICommandManager`.
+- **Game state** — read the local player, party list, target, condition flags, and more via `IClientState`, `IPartyList`, `ITargetManager`, and others.
+- **UI** — draw fully custom ImGui windows and overlays using the `IUiBuilder` provided by `IDalamudPluginInterface`.
+- **Game data** — query Excel sheets and other game data files through `IDataManager`.
+- **Native interop** — hook and call into native game functions using `IGameInteropProvider` and `ISigScanner`.
+- **Inter-plugin communication** — expose and consume typed IPC channels with the `ICallGateProvider` / `ICallGateSubscriber` API.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Set up your development environment and write your first Dalamud plugin.
+  </Card>
+  <Card title="Core concepts" icon="book" href="/concepts/plugin-system">
+    Learn how the plugin system, service container, and plugin lifecycle work.
+  </Card>
+  <Card title="Guides" icon="map" href="/guides/ui-with-imgui">
+    Practical walkthroughs for UI, game data, chat commands, hooking, and more.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/plugin/idalamudplugin">
+    Full interface documentation for every Dalamud service and plugin API.
+  </Card>
+</CardGroup>

@@ -1,0 +1,334 @@
+---
+title: "IUiBuilder interface reference"
+description: "Complete reference for IUiBuilder — the Dalamud entry point for rendering ImGui overlays, managing fonts, and handling UI lifecycle events in plugins."
+---
+
+IUiBuilder is the entry point for rendering ImGui UI overlays in Dalamud. Every plugin receives an `IUiBuilder` instance via `IDalamudPluginInterface.UiBuilder`. You subscribe to the `Draw` event to issue ImGui calls, and use the font handles and helper properties to control how your UI appears.
+
+## Events
+
+### Draw
+
+```csharp
+event Action? Draw;
+```
+
+Fired each frame when Dalamud is ready to render plugin UI. This is the only safe place to call static ImGui APIs. Dalamud automatically suppresses the event when the game UI is hidden (unless you disable that behavior).
+
+<Warning>
+Only call ImGui APIs inside a `Draw` handler. Calling ImGui methods outside of this event — for example, from a framework tick or another thread — is unsupported and will cause undefined behavior or crashes.
+</Warning>
+
+### ResizeBuffers
+
+```csharp
+event Action? ResizeBuffers;
+```
+
+Fired when the game's DirectX device requests a buffer resize (for example, when the user changes the game's resolution or window mode). Release any device-dependent resources here and recreate them after the event returns.
+
+### OpenConfigUi
+
+```csharp
+event Action? OpenConfigUi;
+```
+
+Fired when Dalamud or the user requests that the plugin open its configuration interface. Dalamud surfaces a button in the plugin manager that triggers this event. Subscribe to it to show your settings window.
+
+### OpenMainUi
+
+```csharp
+event Action? OpenMainUi;
+```
+
+Fired when Dalamud or the user requests that the plugin open its main interface. Similar to `OpenConfigUi`, this is triggered via the plugin manager's main UI button.
+
+### ShowUi
+
+```csharp
+event Action? ShowUi;
+```
+
+Fired when plugin UI or interface modifications should be shown after being hidden. This event may fire consecutively. Use it to restore the visible state of your windows. See also `HideUi`.
+
+### HideUi
+
+```csharp
+event Action? HideUi;
+```
+
+Fired when plugin UI or interface modifications should be hidden. Triggered by the game's UI hide toggle, cutscenes, or GPose (unless the corresponding `Disable*` properties are set). This event may fire consecutively.
+
+### DefaultGlobalScaleChanged
+
+```csharp
+event Action? DefaultGlobalScaleChanged;
+```
+
+Fired when the user changes the global UI scale in Dalamud's settings. Rebuild any cached layout values that depend on global scale when you receive this event.
+
+### DefaultFontChanged
+
+```csharp
+event Action? DefaultFontChanged;
+```
+
+Fired when the default Dalamud font is rebuilt (for example, after a language change or scale adjustment). If you hold a reference to `FontDefault` or similar `ImFontPtr` properties, treat them as stale after this event.
+
+### DefaultStyleChanged
+
+```csharp
+event Action? DefaultStyleChanged;
+```
+
+Fired when the default Dalamud ImGui style is changed. Reapply any style overrides you have pushed if you depend on the base style.
+
+---
+
+## Properties
+
+### Font handles (persistent)
+
+These handles remain valid across frame boundaries and are safe to store as fields.
+
+<ResponseField name="DefaultFontHandle" type="IFontHandle">
+  Handle to the default Dalamud font, which supports all game languages and icons. Use `IFontHandle.Push()` inside your `Draw` handler to activate it.
+</ResponseField>
+
+<ResponseField name="IconFontHandle" type="IFontHandle">
+  Handle to the default Dalamud icon font based on FontAwesome 5 Free Solid. Push this inside `Draw` before rendering icon glyphs.
+</ResponseField>
+
+<ResponseField name="MonoFontHandle" type="IFontHandle">
+  Handle to the default Dalamud monospaced font based on Inconsolata Regular. Useful for displaying code or structured text.
+</ResponseField>
+
+<ResponseField name="IconFontFixedWidthHandle" type="IFontHandle">
+  Handle to the default Dalamud icon font with fixed-width, vertically centered glyphs. Prefer this over `IconFontHandle` when aligning icons in tables or lists.
+</ResponseField>
+
+<ResponseField name="DefaultFontSpec" type="IFontSpec">
+  The specification used for the default Dalamud font, including its size in points and pixels. Use this to create matching custom font handles.
+</ResponseField>
+
+### Font pointers (Draw-only)
+
+<Warning>
+These `ImFontPtr` properties are only valid inside a `Draw` handler. Accessing them outside the draw callback is dangerous and not supported.
+</Warning>
+
+<ResponseField name="FontDefault" type="ImFontPtr">
+  Pointer to the default Dalamud font (all game languages and icons). Only valid inside `Draw`.
+</ResponseField>
+
+<ResponseField name="FontIcon" type="ImFontPtr">
+  Pointer to the FontAwesome 5 Free Solid icon font. Only valid inside `Draw`.
+</ResponseField>
+
+<ResponseField name="FontMono" type="ImFontPtr">
+  Pointer to the Inconsolata Regular monospaced font. Only valid inside `Draw`.
+</ResponseField>
+
+<ResponseField name="FontIconFixedWidth" type="ImFontPtr">
+  Pointer to the fixed-width, vertically centered icon font. Only valid inside `Draw`.
+</ResponseField>
+
+### Font size
+
+<ResponseField name="FontDefaultSizePt" type="float">
+  The default Dalamud font size in points.
+</ResponseField>
+
+<ResponseField name="FontDefaultSizePx" type="float">
+  The default Dalamud font size in pixels.
+</ResponseField>
+
+### Device and window
+
+<ResponseField name="DeviceHandle" type="nint">
+  Pointer to the game's active Direct3D device (`IUnknown`). Use `QueryInterface` with `IID_ID3D11Device` to obtain a typed pointer. Returns `0` if the device is not yet available.
+</ResponseField>
+
+<ResponseField name="WindowHandlePtr" type="nint">
+  `HWND` of the main game window. Returns `0` if not yet available.
+</ResponseField>
+
+### Visibility control
+
+<ResponseField name="DisableAutomaticUiHide" type="bool">
+  When `true`, your plugin's UI will not be hidden when the game's UI is hidden (regardless of the reason). Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="DisableUserUiHide" type="bool">
+  When `true`, your plugin's UI will not be hidden when the user manually toggles the UI with the keybind. Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="DisableCutsceneUiHide" type="bool">
+  When `true`, your plugin's UI will not be hidden during cutscenes. Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="DisableGposeUiHide" type="bool">
+  When `true`, your plugin's UI will not be hidden while GPose is active. Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="OverrideGameCursor" type="bool">
+  When `true`, replaces the game's hardware cursor with the ImGui software cursor. Useful when your UI requires cursor feedback that the game cursor does not provide.
+</ResponseField>
+
+### State
+
+<ResponseField name="FrameCount" type="ulong">
+  The number of times `Draw` has been called since the plugin was loaded. Use this to throttle per-frame work.
+</ResponseField>
+
+<ResponseField name="CutsceneActive" type="bool">
+  `true` when a cutscene is currently playing.
+</ResponseField>
+
+<ResponseField name="ShouldModifyUi" type="bool">
+  `true` when Dalamud is currently dispatching draw events. Check this before performing UI modifications outside the `Draw` event.
+</ResponseField>
+
+<ResponseField name="UiPrepared" type="bool">
+  `true` when the DirectX device and ImGui scene are ready. Use `WaitForUi()` instead of polling this property.
+</ResponseField>
+
+<ResponseField name="ShouldUseReducedMotion" type="bool">
+  `true` when the user has enabled the "Reduce Motion" setting in Dalamud. When this is set, prefer fewer or no animations.
+</ResponseField>
+
+<ResponseField name="PluginUISoundEffectsEnabled" type="bool">
+  `true` when the user has enabled the "Enable sound effects for plugin windows" setting. This is also affected by the in-game System Sounds option and volume.
+</ResponseField>
+
+### Font atlas
+
+<ResponseField name="FontAtlas" type="IFontAtlas">
+  The plugin-private font atlas. Use this to create custom `IFontHandle` instances with `NewDelegateFontHandle` or `NewGameFontHandle`. Each plugin receives its own isolated atlas.
+</ResponseField>
+
+---
+
+## Methods
+
+### LoadUld
+
+```csharp
+UldWrapper LoadUld(string uldPath);
+```
+
+Loads an ULD file, which can load textures containing multiple icons in a single texture sheet.
+
+<ParamField path="uldPath" type="string" required>
+  The game path to the requested ULD file (e.g., `"ui/uld/ActionBar.uld"`).
+</ParamField>
+
+Returns a `UldWrapper` around the loaded file.
+
+### WaitForUi
+
+```csharp
+Task WaitForUi();
+```
+
+Returns a `Task` that completes once the game's `Present` has been called at least once, meaning the DirectX device and ImGui scene are ready.
+
+### RunWhenUiPrepared
+
+```csharp
+Task<T> RunWhenUiPrepared<T>(Func<T> func, bool runInFrameworkThread = false);
+Task<T> RunWhenUiPrepared<T>(Func<Task<T>> func, bool runInFrameworkThread = false);
+```
+
+Waits for the UI to be prepared, then executes `func` and returns the result.
+
+<ParamField path="func" type="Func<T> or Func<Task<T>>" required>
+  The function to execute once the UI is ready.
+</ParamField>
+
+<ParamField path="runInFrameworkThread" type="bool">
+  When `true`, the function is run on the game's framework thread. Defaults to `false`.
+</ParamField>
+
+### CreateFontAtlas
+
+```csharp
+IFontAtlas CreateFontAtlas(
+    FontAtlasAutoRebuildMode autoRebuildMode,
+    bool isGlobalScaled = true,
+    string? debugName = null);
+```
+
+Creates an isolated `IFontAtlas`. Use this when you need to manage fonts independently — for example, to add or remove fonts without triggering a full rebuild of the shared atlas.
+
+<ParamField path="autoRebuildMode" type="FontAtlasAutoRebuildMode" required>
+  Controls when and how the atlas rebuilds itself. Use `FontAtlasAutoRebuildMode.Async` for background rebuilds, `OnNewFrame` to rebuild at the start of the next frame, or `Disable` to rebuild manually.
+</ParamField>
+
+<ParamField path="isGlobalScaled" type="bool">
+  When `true`, fonts in this atlas scale with the Dalamud global scale. Defaults to `true`.
+</ParamField>
+
+<ParamField path="debugName" type="string">
+  An optional name for this atlas used in logs and debug tooling.
+</ParamField>
+
+Returns a new `IFontAtlas` instance. The atlas is disposed automatically when the plugin is unloaded.
+
+---
+
+## Complete example
+
+The following example shows a plugin that subscribes to `Draw`, `OpenMainUi`, and `OpenConfigUi` to render a simple window with a custom font.
+
+```csharp
+using Dalamud.Interface.Windowing;
+using Dalamud.Plugin;
+using ImGuiNET;
+
+public class MyPlugin : IDalamudPlugin
+{
+    private readonly WindowSystem windowSystem = new("MyPlugin");
+    private readonly MyWindow mainWindow;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        mainWindow = new MyWindow();
+        windowSystem.AddWindow(mainWindow);
+
+        pluginInterface.UiBuilder.Draw += windowSystem.Draw;
+        pluginInterface.UiBuilder.OpenMainUi += OnOpenMainUi;
+        pluginInterface.UiBuilder.OpenConfigUi += OnOpenMainUi;
+    }
+
+    private void OnOpenMainUi() => mainWindow.IsOpen = true;
+
+    public void Dispose()
+    {
+        // Unsubscribe to prevent memory leaks
+        // (plugin interface handles UiBuilder disposal automatically,
+        //  but your own subscriptions should be cleaned up)
+        windowSystem.RemoveAllWindows();
+    }
+}
+
+public class MyWindow : Window
+{
+    public MyWindow() : base("My Plugin##main", ImGuiWindowFlags.None)
+    {
+        Size = new System.Numerics.Vector2(400, 200);
+        SizeCondition = ImGuiCond.FirstUseEver;
+    }
+
+    public override void Draw()
+    {
+        ImGui.Text("Hello from MyPlugin!");
+        if (ImGui.Button("Close"))
+            IsOpen = false;
+    }
+}
+```
+
+<Note>
+The `Draw` event is fired every frame. Keep your draw callback fast. Move expensive work (data fetching, heavy computation) to a framework thread or a background task, and only read pre-computed results inside `Draw`.
+</Note>

@@ -1,0 +1,182 @@
+---
+title: "IObjectTable service reference"
+description: "Iterate, search, and access all spawned game objects in the FFXIV world, including the local player, NPCs, players, and event objects."
+---
+
+`IObjectTable` is an enumerable collection of every `IGameObject` currently spawned in the FFXIV game world. You use it to iterate nearby entities, look up objects by ID, and access the local player character. The table is organized into named sub-collections that map to distinct index ranges in the game's internal object table.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IObjectTable objectTable)
+{
+    foreach (var obj in objectTable)
+    {
+        Plugin.Log.Verbose($"Object: {obj.Name} at {obj.Position}");
+    }
+}
+```
+
+<Warning>
+  Always access `IObjectTable` from the framework update thread. Reading game object data from background threads or the render thread is not thread-safe and can cause crashes or undefined behavior.
+</Warning>
+
+## Properties
+
+<ResponseField name="Address" type="nint">
+  The memory address of the raw object table in the game process.
+</ResponseField>
+
+<ResponseField name="Length" type="int">
+  The total number of slots in the object table (including empty slots).
+</ResponseField>
+
+<ResponseField name="LocalPlayer" type="IPlayerCharacter?">
+  The local player character, or `null` when no character is logged in.
+</ResponseField>
+
+<ResponseField name="PlayerObjects" type="IEnumerable<IBattleChara>">
+  All spawned battle characters that are player characters. Does not include mounts, minions, or accessories.
+</ResponseField>
+
+<ResponseField name="CharacterManagerObjects" type="IEnumerable<IGameObject>">
+  All objects in indexes 0–199. Includes player characters, mounts, minions, and accessories.
+</ResponseField>
+
+<ResponseField name="ClientObjects" type="IEnumerable<IGameObject>">
+  All objects in indexes 200–448.
+</ResponseField>
+
+<ResponseField name="EventObjects" type="IEnumerable<IGameObject>">
+  All objects in indexes 449–488.
+</ResponseField>
+
+<ResponseField name="StandObjects" type="IEnumerable<IGameObject>">
+  All objects in indexes 489–628.
+</ResponseField>
+
+<ResponseField name="ReactionEventObjects" type="IEnumerable<IGameObject>">
+  All objects in indexes 629–728.
+</ResponseField>
+
+## Indexer
+
+```csharp
+public IGameObject? this[int index] { get; }
+```
+
+Returns the object at the given spawn index, or `null` if the slot is empty.
+
+## Methods
+
+### SearchById
+
+```csharp
+public IGameObject? SearchById(ulong gameObjectId);
+```
+
+Finds an object by its game object ID (a `ulong`). Returns `null` if no matching object is found.
+
+<ParamField path="gameObjectId" type="ulong" required>
+  The game object's unique ID.
+</ParamField>
+
+<ResponseField name="returns" type="IGameObject?">
+  The matching game object, or `null` if not present.
+</ResponseField>
+
+---
+
+### SearchByEntityId
+
+```csharp
+public IGameObject? SearchByEntityId(uint entityId);
+```
+
+Finds an object by its entity ID (a `uint`). Returns `null` if no matching object is found.
+
+<ParamField path="entityId" type="uint" required>
+  The entity ID to search for.
+</ParamField>
+
+<ResponseField name="returns" type="IGameObject?">
+  The matching game object, or `null` if not present.
+</ResponseField>
+
+---
+
+### GetObjectAddress
+
+```csharp
+public nint GetObjectAddress(int index);
+```
+
+Returns the raw memory address of the object at the given index, without wrapping it in a managed object.
+
+<ParamField path="index" type="int" required>
+  The index of the object in the table.
+</ParamField>
+
+<ResponseField name="returns" type="nint">
+  Memory address of the object, or `0` if the slot is empty.
+</ResponseField>
+
+---
+
+### CreateObjectReference
+
+```csharp
+public IGameObject? CreateObjectReference(nint address);
+```
+
+Creates a managed `IGameObject` wrapper around an object at the given memory address.
+
+<ParamField path="address" type="nint" required>
+  The memory address of the game object.
+</ParamField>
+
+<ResponseField name="returns" type="IGameObject?">
+  A managed object reference, or `null` if the address is invalid.
+</ResponseField>
+
+## Example: listing nearby players
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IObjectTable objectTable;
+    private readonly IFramework framework;
+
+    public MyPlugin(IObjectTable objectTable, IFramework framework)
+    {
+        this.objectTable = objectTable;
+        this.framework = framework;
+        this.framework.Update += this.OnUpdate;
+    }
+
+    private void OnUpdate(IFramework fw)
+    {
+        // Safe to access game objects here — we're on the framework thread.
+        if (this.objectTable.LocalPlayer is { } player)
+        {
+            Plugin.Log.Verbose($"Local player: {player.Name} HP: {player.CurrentHp}");
+        }
+
+        foreach (var pc in this.objectTable.PlayerObjects)
+        {
+            var dist = Vector3.Distance(
+                this.objectTable.LocalPlayer?.Position ?? Vector3.Zero,
+                pc.Position);
+            Plugin.Log.Verbose($"Nearby player: {pc.Name} ({dist:F1}y away)");
+        }
+    }
+
+    public void Dispose()
+    {
+        this.framework.Update -= this.OnUpdate;
+    }
+}
+```

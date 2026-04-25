@@ -1,0 +1,169 @@
+---
+title: 'Services and dependency injection in Dalamud'
+description: 'Understand how Dalamud exposes game and framework functionality to plugins through its IoC container and the full list of available services.'
+---
+
+Dalamud exposes all of its functionality to plugins through a set of **services** — singleton objects managed by an inversion-of-control (IoC) container. Rather than constructing these objects yourself, you declare the ones you need and Dalamud injects them automatically. This keeps your plugin code decoupled from internal implementation details and makes testing straightforward.
+
+## How the service container works
+
+All services implement the `IDalamudService` marker interface. Dalamud's `ServiceManager` initializes each service at startup, resolving dependencies between services automatically. Each service is registered under its interface type (e.g., `IFramework`, `IClientState`) so your plugin receives a stable interface that Dalamud can update internally without breaking your code.
+
+Plugin-scoped services (like `IDalamudPluginInterface`) are created fresh for each loaded plugin. Global services (like `IFramework` and `IDataManager`) are shared singletons across all plugins.
+
+## Injecting services into your plugin
+
+Dalamud supports two injection styles. Constructor injection is the recommended approach.
+
+### Constructor injection
+
+Declare the services you need as constructor parameters. Dalamud resolves and passes them when it instantiates your plugin:
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IPluginLog log;
+    private readonly IClientState clientState;
+    private readonly IFramework framework;
+
+    public MyPlugin(
+        IPluginLog log,
+        IClientState clientState,
+        IFramework framework)
+    {
+        this.log = log;
+        this.clientState = clientState;
+        this.framework = framework;
+
+        this.framework.Update += this.OnFrameworkUpdate;
+        this.log.Info("MyPlugin loaded.");
+    }
+
+    private void OnFrameworkUpdate(IFramework fw)
+    {
+        // Called every game frame on the framework thread.
+    }
+
+    public void Dispose()
+    {
+        this.framework.Update -= this.OnFrameworkUpdate;
+    }
+}
+```
+
+<Tip>
+Prefer constructor injection over property injection. Constructor injection makes your plugin's dependencies explicit, prevents partially initialized objects, and is easier to unit test. Reserve property injection for helper classes created after your plugin's constructor runs.
+</Tip>
+
+### Property injection with [PluginService]
+
+For helper classes instantiated via `IDalamudPluginInterface.Create<T>()`, you can annotate properties with the `[PluginService]` attribute:
+
+```csharp
+using Dalamud.IoC;
+using Dalamud.Plugin.Services;
+
+public class MyWindow
+{
+    [PluginService]
+    private IGameGui GameGui { get; init; } = null!;
+
+    [PluginService]
+    private IChatGui ChatGui { get; init; } = null!;
+}
+```
+
+Dalamud sets these properties after the object is constructed. You must create instances of such classes with `pluginInterface.Create<MyWindow>()` — `new MyWindow()` will leave the properties unset.
+
+## Available services
+
+### Game state
+
+These services give you access to the live state of the game world and the local player.
+
+| Service | Description |
+|---|---|
+| `IClientState` | Player login state, territory, map, PvP status, and related events (Login, Logout, TerritoryChanged). |
+| `IObjectTable` | The full table of spawned game objects, including the local player character. |
+| `IPartyList` | The current party composition. |
+| `IBuddyList` | Companions (chocobo, squadron) associated with the player. |
+| `ICondition` | Active condition flags (in combat, crafting, mounted, etc.). |
+| `ITargetManager` | Current target, focus target, hover target, and mouseover target. |
+| `IFateTable` | Active FATEs in the current zone. |
+| `IJobGauges` | Job-specific gauge data for the current class/job. |
+| `IPlayerState` | Player state data (content ID, levels, unlocks). |
+| `IDutyState` | Duty/instance state and related events. |
+| `IGamepadState` | Raw gamepad button and axis states. |
+| `IKeyState` | Keyboard key state. |
+| `IGameConfig` | Game configuration options (graphics, sound, UI settings). |
+| `IGameLifecycle` | Game lifecycle events (login screen, character select). |
+| `IUnlockState` | Player achievement and unlock state. |
+| `IAetheryteList` | The player's aetheryte favourites list. |
+| `IGameInventory` | Inventory change events. |
+
+### UI
+
+These services let you interact with and extend the game's user interface.
+
+| Service | Description |
+|---|---|
+| `IGameGui` | In-game UI state: hidden flag, hovered item/action, world-to-screen projection, addon pointer lookup. |
+| `IChatGui` | Read and write to the chat log; intercept and suppress chat messages. |
+| `IToastGui` | Display toast notifications (normal, quest, error). |
+| `IFlyTextGui` | Display floating combat text above entities. |
+| `INamePlateGui` | Customize player and NPC name plates. |
+| `IDtrBar` | Add entries to the server info bar (DTR bar) at the top of the screen. |
+| `IPartyFinderGui` | Read and interact with the Party Finder UI. |
+| `ITitleScreenMenu` | Add entries to the title screen menu. |
+| `IContextMenu` | Add items to right-click context menus. |
+| `INotificationManager` | Show desktop-style toast notifications. |
+| `IAddonLifecycle` | Hook into addon (native UI window) setup and teardown events. |
+| `IAddonEventManager` | Register event listeners on native addon nodes. |
+| `IAgentLifecycle` | Hook into game agent lifecycle events. |
+
+### Data
+
+These services provide access to game data files, textures, and localization.
+
+| Service | Description |
+|---|---|
+| `IDataManager` | Read game Excel sheets and raw game files via Lumina. |
+| `ITextureProvider` | Load and cache textures from game data or plugin assets. |
+| `ITextureReadbackProvider` | Read texture pixel data back to the CPU. |
+| `ITextureSubstitutionProvider` | Replace game textures at runtime. |
+| `ISeStringEvaluator` | Evaluate and resolve SeString expressions. |
+| `IMarketBoard` | Market board data and purchase events. |
+| `IReliableFileStorage` | Safe file I/O with crash-resistant write operations. |
+
+### Interop and framework
+
+These services expose low-level game internals and the Dalamud execution model.
+
+| Service | Description |
+|---|---|
+| `IFramework` | The game's main update loop: subscribe to `Update` for per-frame callbacks, or dispatch work to the framework thread. |
+| `IGameInteropProvider` | Create hooks into native game functions using signatures or addresses. |
+| `ISigScanner` | Scan the game's memory for byte patterns to locate function addresses. |
+| `ICommandManager` | Register and remove in-game slash commands. |
+| `IPluginLog` | Scoped Serilog-backed logger for your plugin. |
+| `IConsole` | Dalamud developer console command registration. |
+| `ISelfTestRegistry` | Register self-test functions for automated plugin health checks. |
+
+### Plugin interface
+
+`IDalamudPluginInterface` is a special scoped service that provides plugin-specific context rather than game state.
+
+```csharp
+public MyPlugin(IDalamudPluginInterface pi)
+{
+    // pi.ConfigDirectory  — per-plugin config folder
+    // pi.Manifest         — the parsed plugin manifest
+    // pi.Reason           — why the plugin was loaded
+    // pi.UiBuilder        — entry point for ImGui rendering
+    // pi.GetPluginConfig() / pi.SavePluginConfig() — config serialization
+    // pi.GetIpcProvider<T>() / GetIpcSubscriber<T>() — inter-plugin communication
+}
+```

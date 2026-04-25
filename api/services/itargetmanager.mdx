@@ -1,0 +1,105 @@
+---
+title: "ITargetManager service reference"
+description: "Read and set the player's target, focus target, soft target, mouseover target, and other targeting slots in FFXIV plugins."
+---
+
+`ITargetManager` exposes every targeting slot the FFXIV client tracks for the local player. All properties are readable and writable — you can both inspect what the player has targeted and programmatically change their target.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(ITargetManager targetManager)
+{
+    var target = targetManager.Target;
+    if (target != null)
+        Plugin.Log.Information($"Current target: {target.Name}");
+}
+```
+
+<Warning>
+  Read and write targeting state only from the framework update thread. Accessing game state from other threads can cause crashes or data corruption.
+</Warning>
+
+## Properties
+
+All targeting slots are `IGameObject?`. Set any slot to `null` to clear it.
+
+<ResponseField name="Target" type="IGameObject?">
+  The player's current hard target — the entity selected by clicking or pressing Tab. Set to `null` to clear the target.
+</ResponseField>
+
+<ResponseField name="MouseOverTarget" type="IGameObject?">
+  The object the player's cursor is hovering over in the game world. Set to `null` to clear.
+</ResponseField>
+
+<ResponseField name="FocusTarget" type="IGameObject?">
+  The player's focus target. Set to `null` to clear the focus target.
+</ResponseField>
+
+<ResponseField name="SoftTarget" type="IGameObject?">
+  The tab-targeting soft target. Set to `null` to clear.
+</ResponseField>
+
+<ResponseField name="PreviousTarget" type="IGameObject?">
+  The player's previous hard target. Set to `null` to clear.
+</ResponseField>
+
+<ResponseField name="GPoseTarget" type="IGameObject?">
+  The target used inside Group Pose (GPose) mode. Set to `null` to clear.
+</ResponseField>
+
+<ResponseField name="MouseOverNameplateTarget" type="IGameObject?">
+  The entity whose nameplate the player's cursor is hovering over. Set to `null` to clear.
+</ResponseField>
+
+## Example: reading and setting targets
+
+```csharp
+using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly ITargetManager targetManager;
+    private readonly IFramework framework;
+
+    public MyPlugin(ITargetManager targetManager, IFramework framework)
+    {
+        this.targetManager = targetManager;
+        this.framework = framework;
+        this.framework.Update += this.OnUpdate;
+    }
+
+    private void OnUpdate(IFramework fw)
+    {
+        // Read the hard target
+        var target = this.targetManager.Target;
+        if (target is IBattleChara chara)
+        {
+            Plugin.Log.Verbose(
+                $"Target: {chara.Name} HP {chara.CurrentHp}/{chara.MaxHp}");
+        }
+
+        // Read the focus target
+        var focus = this.targetManager.FocusTarget;
+        if (focus != null)
+            Plugin.Log.Verbose($"Focus: {focus.Name}");
+    }
+
+    private void ClearTarget()
+    {
+        // Programmatically clear the hard target
+        this.targetManager.Target = null;
+    }
+
+    public void Dispose()
+    {
+        this.framework.Update -= this.OnUpdate;
+    }
+}
+```
+
+<Tip>
+  Use `IObjectTable.SearchByEntityId` or `IObjectTable.SearchById` to resolve an object from a known ID, then assign it to `Target` or another slot to programmatically change the player's targeting state.
+</Tip>

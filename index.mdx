@@ -1,133 +1,67 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "Dalamud: FFXIV Plugin Development Framework"
+description: "Dalamud is an open-source plugin framework for Final Fantasy XIV, giving developers native game access, a rich service API, and ImGui-based UI tools."
 ---
 
-## Setting up
+Dalamud is the plugin development framework that powers the FFXIV modding ecosystem. Injected into the game via [XIVLauncher](https://github.com/goatcorp/FFXIVQuickLauncher), it exposes a comprehensive set of services — game data, chat, UI rendering, function hooking, and more — that let you build powerful in-game plugins with C#.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first Dalamud plugin from scratch in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Core Concepts" icon="book" href="/concepts/plugin-system">
+    Understand how the plugin system, services, and lifecycle work.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Guides" icon="map" href="/guides/ui-with-imgui">
+    Step-by-step guides for UI, game data, hooks, IPC, and more.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/plugin/idalamudplugin">
+    Full reference for every service interface and public API.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can build
 
-Everything you need to create world-class documentation.
+Dalamud plugins run inside FFXIV and have access to everything happening in the game. Here are just a few things developers build with it:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Custom UI Overlays" icon="window" href="/guides/ui-with-imgui">
+    Render ImGui windows and widgets on top of the game.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Game Data Access" icon="database" href="/guides/game-data">
+    Read Excel sheets, items, quests, and more via Lumina.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Chat & Commands" icon="terminal" href="/guides/chat-commands">
+    Register slash commands and intercept chat messages.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Function Hooking" icon="link" href="/guides/hooking">
+    Intercept and modify native game function calls.
   </Card>
-</Columns>
+  <Card title="Plugin IPC" icon="arrows-left-right" href="/guides/ipc">
+    Share data and call functions across plugins safely.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Persist plugin settings across sessions.
+  </Card>
+</CardGroup>
 
-## Make your content agent ready
+## Get started
 
-Make your docs work for humans and AI agents alike.
+<Steps>
+  <Step title="Install XIVLauncher">
+    Download [XIVLauncher](https://goatcorp.github.io/) — it manages Dalamud installation and injection automatically. You do not need to install Dalamud manually.
+  </Step>
+  <Step title="Set up your development environment">
+    Install the .NET 8 SDK and your preferred IDE (Visual Studio or Rider). See the [building guide](/building) for all required dependencies.
+  </Step>
+  <Step title="Create your plugin project">
+    Follow the [Quickstart](/quickstart) to scaffold a new plugin using the official template and wire up your first service.
+  </Step>
+  <Step title="Explore the API">
+    Browse the [API Reference](/api/plugin/idalamudplugin) to discover services for game state, UI, chat, hooking, and more.
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  If you just want to **use** Dalamud plugins as a player, download [XIVLauncher](https://goatcorp.github.io/) — you don't need to read these docs. This site is for **plugin developers**.
+</Note>

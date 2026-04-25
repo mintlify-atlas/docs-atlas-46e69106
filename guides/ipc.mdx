@@ -1,0 +1,193 @@
+---
+title: "Inter-Plugin Communication (IPC) in Dalamud"
+description: "Learn how to expose and consume inter-plugin communication channels using Dalamud's ICallGateProvider and ICallGateSubscriber with typed generics."
+---
+
+Dalamud's IPC system lets plugins communicate without taking compile-time dependencies on each other. A plugin acting as the **provider** registers a named call gate and optionally exposes a function that other plugins can invoke or subscribes them to notifications. A plugin acting as a **subscriber** looks up a call gate by name and calls it or registers a listener. Both sides interact through `IDalamudPluginInterface`, using generic type parameters that enforce a shared contract.
+
+## Providers vs subscribers
+
+| Role | Interface | What it does |
+|---|---|---|
+| Provider | `ICallGateProvider<..., TRet>` | Registers an `Action` or `Func` behind a named gate; sends notifications to all subscribers |
+| Subscriber | `ICallGateSubscriber<..., TRet>` | Calls the provider's registered function; subscribes to notifications |
+
+The type parameters encode the call signature. The **last** type parameter is always the return type. Use `object` as the return type for void-like gates (actions).
+
+## Setting up a provider
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Ipc;
+
+public sealed class MyProviderPlugin : IDalamudPlugin
+{
+    private readonly ICallGateProvider<string, int, string> gate;
+
+    public MyProviderPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        // Name: "MyPlugin.FormatMessage"
+        // Signature: string input, int count -> string result
+        this.gate = pluginInterface.GetIpcProvider<string, int, string>(
+            "MyPlugin.FormatMessage");
+
+        this.gate.RegisterFunc(this.FormatMessage);
+    }
+
+    private string FormatMessage(string message, int count)
+        => $"[{count}] {message}";
+
+    public void Dispose()
+    {
+        this.gate.UnregisterFunc();
+    }
+}
+```
+
+### Provider API
+
+| Method | Description |
+|---|---|
+| `RegisterFunc(Func<..., TRet> func)` | Expose a function that subscribers can call |
+| `RegisterAction(Action<...> action)` | Expose a void function |
+| `UnregisterFunc()` | Remove the registered function |
+| `UnregisterAction()` | Remove the registered action |
+| `SendMessage(...)` | Push a notification to all subscribers |
+| `SubscriptionCount` | Number of currently active subscribers |
+
+## Setting up a subscriber
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Ipc;
+
+public sealed class MySubscriberPlugin : IDalamudPlugin
+{
+    private readonly ICallGateSubscriber<string, int, string> gate;
+
+    public MySubscriberPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        this.gate = pluginInterface.GetIpcSubscriber<string, int, string>(
+            "MyPlugin.FormatMessage");
+
+        // Optional: subscribe to push notifications from the provider
+        this.gate.Subscribe(this.OnFormatMessageNotification);
+    }
+
+    private void OnFormatMessageNotification(string message, int count)
+    {
+        Plugin.Log.Info($"Notification received: {this.gate.InvokeFunc(message, count)}");
+    }
+
+    private string CallProvider(string message, int count)
+    {
+        if (!this.gate.HasFunction)
+        {
+            Plugin.Log.Warning("MyPlugin is not loaded; IPC unavailable.");
+            return message;
+        }
+
+        return this.gate.InvokeFunc(message, count);
+    }
+
+    public void Dispose()
+    {
+        this.gate.Unsubscribe(this.OnFormatMessageNotification);
+    }
+}
+```
+
+### Subscriber API
+
+| Member | Description |
+|---|---|
+| `HasFunction` | `true` if the provider has registered a `Func` |
+| `HasAction` | `true` if the provider has registered an `Action` |
+| `InvokeFunc(...)` | Call the provider's registered function and return its result |
+| `InvokeAction(...)` | Call the provider's registered action |
+| `Subscribe(action)` | Register a listener for push notifications from `SendMessage` |
+| `Unsubscribe(action)` | Remove a previously registered listener |
+
+## Typed generic signatures
+
+Both `GetIpcProvider` and `GetIpcSubscriber` support between one and nine type parameters. The final type parameter is always the return type. Examples:
+
+```csharp
+// No input arguments, returns bool
+ICallGateProvider<bool> gateA = pi.GetIpcProvider<bool>("Plugin.IsReady");
+
+// One input (string), returns void (use object for no return)
+ICallGateProvider<string, object> gateB = pi.GetIpcProvider<string, object>("Plugin.OnEvent");
+
+// Two inputs, returns string
+ICallGateProvider<string, int, string> gateC = pi.GetIpcProvider<string, int, string>("Plugin.Format");
+
+// Subscriber mirrors the provider signature exactly
+ICallGateSubscriber<string, int, string> sub = pi.GetIpcSubscriber<string, int, string>("Plugin.Format");
+```
+
+Dalamud enforces that both sides use the same type parameters. If the types do not match at runtime an `IpcTypeMismatchError` is thrown.
+
+<Tip>
+Name your call gates with a `PluginName.MethodName` convention (e.g. `"PenumbraIPC.GetCollectionForObject"`) so names remain unique across the plugin ecosystem and other developers can identify the owner at a glance.
+</Tip>
+
+## Complete provider + subscriber example
+
+The following shows two minimal plugins wired together through a single IPC gate:
+
+```csharp
+// ─── Provider ───────────────────────────────────────────────────────────────
+public sealed class GreeterProvider : IDalamudPlugin
+{
+    public const string GateName = "Greeter.GetGreeting";
+
+    private readonly ICallGateProvider<string, string> gate;
+
+    public GreeterProvider(IDalamudPluginInterface pi)
+    {
+        this.gate = pi.GetIpcProvider<string, string>(GateName);
+        this.gate.RegisterFunc(name => $"Hello, {name}!");
+    }
+
+    public void Dispose() => this.gate.UnregisterFunc();
+}
+
+// ─── Subscriber ─────────────────────────────────────────────────────────────
+public sealed class GreeterConsumer : IDalamudPlugin
+{
+    private readonly ICallGateSubscriber<string, string> gate;
+
+    public GreeterConsumer(IDalamudPluginInterface pi)
+    {
+        this.gate = pi.GetIpcSubscriber<string, string>(GreeterProvider.GateName);
+    }
+
+    public string GetGreeting(string playerName)
+    {
+        if (!this.gate.HasFunction)
+            return $"Hi, {playerName}"; // fallback when provider is absent
+
+        return this.gate.InvokeFunc(playerName);
+    }
+
+    public void Dispose() { /* no subscriptions to remove in this example */ }
+}
+```
+
+<Accordion title="Using SendMessage for push notifications">
+  The provider can broadcast a notification to all subscribers without them having to poll:
+
+  ```csharp
+  // Provider side — broadcast when something interesting happens
+  this.gate.SendMessage("update", 42);
+
+  // Subscriber side — registered via Subscribe()
+  private void OnUpdate(string kind, int value)
+  {
+      Plugin.Log.Info($"Received push: kind={kind} value={value}");
+  }
+  ```
+
+  `SendMessage` calls every subscriber's `Subscribe`-registered action synchronously on the calling thread.
+</Accordion>

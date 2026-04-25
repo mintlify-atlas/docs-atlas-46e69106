@@ -1,0 +1,174 @@
+---
+title: "ICallGateProvider interface reference"
+description: "Reference for ICallGateProvider, the server side of Dalamud's inter-plugin communication system for publishing functions and messages."
+---
+
+`ICallGateProvider` is the server (provider) side of Dalamud's inter-plugin communication (IPC) system. Use it to expose functions and actions that other plugins can invoke via `ICallGateSubscriber`, and to broadcast messages to any plugins that have subscribed to your channel.
+
+You obtain an `ICallGateProvider` instance from `IDalamudPluginInterface.GetIpcProvider<...>(name)`. The name identifies the channel and must be unique across the ecosystem.
+
+<Note>
+Use the naming convention `"PluginName.FeatureName"` for all IPC channel names — for example, `"MyPlugin.GetVersion"` or `"MyPlugin.ConfigChanged"`. This avoids collisions with channels registered by other plugins.
+</Note>
+
+---
+
+## Generic type parameters
+
+`ICallGateProvider` is generic over the types of the channel's parameters and return value. The last type parameter is always the return type (`TRet`). The preceding type parameters (`T1`–`T8`) are the input argument types.
+
+| Interface | Signature |
+|---|---|
+| `ICallGateProvider<TRet>` | No input args, returns `TRet` |
+| `ICallGateProvider<T1, TRet>` | One input arg, returns `TRet` |
+| `ICallGateProvider<T1, T2, TRet>` | Two input args, returns `TRet` |
+| `ICallGateProvider<T1, T2, T3, TRet>` | Three input args, returns `TRet` |
+| `ICallGateProvider<T1, T2, T3, T4, TRet>` | Four input args, returns `TRet` |
+| `ICallGateProvider<T1, T2, T3, T4, T5, TRet>` | Five input args, returns `TRet` |
+| `ICallGateProvider<T1, T2, T3, T4, T5, T6, TRet>` | Six input args, returns `TRet` |
+| `ICallGateProvider<T1, T2, T3, T4, T5, T6, T7, TRet>` | Seven input args, returns `TRet` |
+| `ICallGateProvider<T1, T2, T3, T4, T5, T6, T7, T8, TRet>` | Eight input args, returns `TRet` |
+
+For channels that are pure fire-and-forget (no return value), use `object` as `TRet` and register an `Action` (not a `Func`). For message-only channels where you only need `SendMessage`, the `TRet` type parameter still exists but `RegisterFunc` and `RegisterAction` can be omitted.
+
+---
+
+## Properties
+
+<ResponseField name="SubscriptionCount" type="int">
+  The number of subscribers currently listening for messages on this channel via `ICallGateSubscriber.Subscribe`. Use this to skip `SendMessage` calls when no one is listening, as a performance optimization.
+</ResponseField>
+
+---
+
+## Methods
+
+### RegisterAction
+
+```csharp
+public void RegisterAction(Action action);
+// or with arguments:
+public void RegisterAction(Action<T1> action);
+public void RegisterAction(Action<T1, T2> action);
+// ... up to Action<T1, T2, T3, T4, T5, T6, T7, T8>
+```
+
+Registers a delegate (with no return value) that other plugins can invoke via `ICallGateSubscriber.InvokeAction`. The action is called synchronously on the caller's thread.
+
+Only one action can be registered at a time. Calling `RegisterAction` a second time replaces the previous one. The action is called with appropriate type checking; a type mismatch throws `IpcTypeMismatchError` on the subscriber's side.
+
+### RegisterFunc
+
+```csharp
+public void RegisterFunc(Func<TRet> func);
+// or with arguments:
+public void RegisterFunc(Func<T1, TRet> func);
+public void RegisterFunc(Func<T1, T2, TRet> func);
+// ... up to Func<T1, T2, T3, T4, T5, T6, T7, T8, TRet>
+```
+
+Registers a delegate (with a return value) that other plugins can invoke via `ICallGateSubscriber.InvokeFunc`. Like `RegisterAction`, only one func can be registered at a time, and it is called synchronously on the caller's thread.
+
+### UnregisterAction
+
+```csharp
+public void UnregisterAction();
+```
+
+Removes the previously registered action, effectively disabling `InvokeAction` calls on this channel. Subscribers who call `InvokeAction` after this will receive an `IpcNotReadyError`.
+
+### UnregisterFunc
+
+```csharp
+public void UnregisterFunc();
+```
+
+Removes the previously registered func, disabling `InvokeFunc` calls on this channel. Subscribers who call `InvokeFunc` after this will receive an `IpcNotReadyError`.
+
+### SendMessage
+
+```csharp
+public void SendMessage();
+// or with arguments:
+public void SendMessage(T1 arg1);
+public void SendMessage(T1 arg1, T2 arg2);
+// ... up to SendMessage(T1, T2, T3, T4, T5, T6, T7, T8)
+```
+
+Broadcasts a message to all subscribers registered via `ICallGateSubscriber.Subscribe`. Subscribers are called sequentially, in registration order, on the same thread as the caller.
+
+This is a one-way notification mechanism — subscribers receive the arguments but cannot return a value. Use it to notify other plugins of events or state changes (for example, "config changed", "zone entered").
+
+### GetContext
+
+```csharp
+public IpcContext? GetContext();
+```
+
+Returns the `IpcContext` for the current IPC call, which identifies the plugin that initiated the call. This is only non-null when called from inside a registered action or func handler.
+
+```csharp
+public IpcContext
+{
+    public IExposedPlugin? SourcePlugin { get; }
+}
+```
+
+---
+
+## Exceptions
+
+| Exception | When thrown |
+|---|---|
+| `IpcNotReadyError` | A subscriber calls `InvokeAction` or `InvokeFunc` but no action or func has been registered. |
+| `IpcTypeMismatchError` | A subscriber's generic type parameters do not match the provider's registered delegate signature. |
+
+---
+
+## Complete example
+
+The following example shows a plugin acting as a provider, registering both a func (for RPC calls) and a message channel (for event notifications).
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Ipc;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly ICallGateProvider<string> versionProvider;
+    private readonly ICallGateProvider<string, object> configChangedProvider;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        // Register a func that returns the plugin version
+        versionProvider = pluginInterface.GetIpcProvider<string>("MyPlugin.GetVersion");
+        versionProvider.RegisterFunc(GetVersion);
+
+        // Register a message-only channel for config change notifications
+        // We use object as TRet since SendMessage doesn't return anything
+        configChangedProvider = pluginInterface.GetIpcProvider<string, object>(
+            "MyPlugin.ConfigChanged");
+    }
+
+    private string GetVersion() => "1.0.0";
+
+    // Call this whenever your configuration changes
+    public void NotifyConfigChanged(string changedSetting)
+    {
+        // Only broadcast if anyone is listening
+        if (configChangedProvider.SubscriptionCount > 0)
+            configChangedProvider.SendMessage(changedSetting);
+    }
+
+    public void Dispose()
+    {
+        // Unregister so subscribers receive IpcNotReadyError rather than
+        // calling a delegate from a disposed plugin
+        versionProvider.UnregisterFunc();
+    }
+}
+```
+
+<Warning>
+Always call `UnregisterAction()` and `UnregisterFunc()` in your plugin's `Dispose` method. If you do not unregister, subscribers may call into a delegate that refers to an already-disposed object, which will cause exceptions or undefined behavior.
+</Warning>

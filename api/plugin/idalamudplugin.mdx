@@ -1,0 +1,126 @@
+---
+title: "IDalamudPlugin interface reference"
+description: "IDalamudPlugin is the root interface every Dalamud plugin must implement. It extends IDisposable, making cleanup mandatory for all plugins."
+---
+
+`IDalamudPlugin` is the root interface every Dalamud plugin must implement. Dalamud discovers your plugin by looking for a public class that implements this interface, then instantiates it via dependency injection when the plugin is loaded. Because the interface extends `IDisposable`, you must implement `Dispose()` — Dalamud calls it whenever the plugin is unloaded, whether by the user, an update, or a game restart.
+
+## Interface definition
+
+```csharp
+namespace Dalamud.Plugin;
+
+/// <summary>
+/// This interface represents a basic Dalamud plugin. All plugins have to implement this interface.
+/// </summary>
+public interface IDalamudPlugin : IDisposable
+{
+}
+```
+
+The interface has no members beyond those inherited from `IDisposable`. All setup work goes in your constructor (which Dalamud calls with injected services), and all teardown work goes in `Dispose()`.
+
+## Minimal implementation
+
+The following example shows the smallest correct plugin class. Dalamud injects `IDalamudPluginInterface` through the constructor parameter.
+
+```csharp
+using Dalamud.Plugin;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IDalamudPluginInterface pluginInterface;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        this.pluginInterface = pluginInterface;
+
+        // Register UI, commands, and hooks here.
+    }
+
+    public void Dispose()
+    {
+        // Unhook events, unregister commands, and release resources here.
+    }
+}
+```
+
+<Tip>
+Declare your class `sealed`. Dalamud plugin classes are never subclassed, and `sealed` prevents accidental inheritance while also enabling certain compiler optimizations.
+</Tip>
+
+## What Dispose() must do
+
+When Dalamud unloads your plugin, it calls `Dispose()` exactly once. Use it to clean up everything your plugin registered or allocated during its lifetime:
+
+- **Event handlers** — unhook any events you subscribed to on Dalamud services or game objects. Leaving handlers attached after unload will cause crashes or undefined behavior because your code will run after your assembly is gone.
+- **Commands** — unregister any chat commands you registered with `ICommandManager`.
+- **UI windows** — remove or dispose windows registered with the windowing system via `IUiBuilder`.
+- **Hooks** — disable and dispose any `IGameInteropProvider` hooks.
+- **Native resources** — release any unmanaged memory, handles, or file locks.
+- **IPC** — call `RelinquishData()` for any shared data you published through the data-sharing API.
+
+A practical `Dispose()` implementation follows the standard dispose pattern and disposes child objects in reverse order of creation:
+
+```csharp
+public void Dispose()
+{
+    // Unhook events first, so in-flight calls complete cleanly.
+    this.pluginInterface.UiBuilder.Draw -= this.OnDraw;
+
+    // Then dispose child objects that hold resources.
+    this.configWindow.Dispose();
+    this.commandManager.RemoveHandler("/myplugin");
+    this.myHook?.Disable();
+    this.myHook?.Dispose();
+}
+```
+
+<Warning>
+Do not throw exceptions inside `Dispose()`. If `Dispose()` throws, Dalamud cannot complete the unload sequence cleanly and may leave the game in an inconsistent state. Wrap risky cleanup in a `try/catch` block and log the error instead.
+</Warning>
+
+## Dependency injection in the constructor
+
+Dalamud constructs your plugin class using its built-in dependency injection container. You can request any registered Dalamud service by adding it as a constructor parameter:
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IDalamudPluginInterface pluginInterface;
+    private readonly ICommandManager commandManager;
+    private readonly IChatGui chatGui;
+
+    public MyPlugin(
+        IDalamudPluginInterface pluginInterface,
+        ICommandManager commandManager,
+        IChatGui chatGui)
+    {
+        this.pluginInterface = pluginInterface;
+        this.commandManager = commandManager;
+        this.chatGui = chatGui;
+
+        commandManager.AddHandler("/hello", new CommandInfo(this.OnHello)
+        {
+            HelpMessage = "Say hello.",
+        });
+    }
+
+    public void Dispose()
+    {
+        this.commandManager.RemoveHandler("/hello");
+    }
+
+    private void OnHello(string command, string args)
+    {
+        this.chatGui.Print("Hello, Eorzea!");
+    }
+}
+```
+
+<Note>
+The order of constructor parameters does not matter — Dalamud resolves each service by its type. You can request as many services as you need without any performance penalty.
+</Note>

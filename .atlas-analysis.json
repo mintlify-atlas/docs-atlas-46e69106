@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Dalamud",
+  "projectType": "framework",
+  "projectName": "Dalamud",
+  "projectDescription": "A plugin development framework for Final Fantasy XIV that provides game data access, native interoperability, and a rich service API for building in-game plugins.",
   "theme": "palm",
-  "colors": {
-    "primary": "#5c64f4",
-    "light": "#acb4fc",
-    "dark": "#ffffff"
-  },
-  "favicon": "https://media.brand.dev/58465e3f-4f52-443e-97b9-4233511da888.png",
-  "logo": {
-    "light": "https://media.brand.dev/f4e2d5e7-bee0-421f-8d59-da8a3d7c9c01.svg",
-    "dark": "https://media.brand.dev/f4e2d5e7-bee0-421f-8d59-da8a3d7c9c01.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/goatcorp/Dalamud"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/goatcorp/Dalamud"
-    }
-  },
+  "primaryColor": "#5c64f4",
+  "lightColor": "#acb4fc",
+  "darkColor": "#ffffff",
   "navigation": {
     "tabs": [
       {
@@ -85,11 +68,7 @@
               "api/services/idatamanager",
               "api/services/igameinteropprovider",
               "api/services/itextureprovider",
-              "api/services/inotificationmanager",
-              "api/services/isigsscanner",
-              "api/services/iobjecttable",
-              "api/services/itargetmanager",
-              "api/services/ipartylist"
+              "api/services/inotificationmanager"
             ]
           },
           {
@@ -103,13 +82,45 @@
             "group": "Interop & IPC",
             "pages": [
               "api/ipc/icallgateprovider",
-              "api/ipc/icallgatesubscriber",
-              "api/hooking/hook",
-              "api/hooking/asmhook"
+              "api/ipc/icallgatesubscriber"
             ]
           }
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Plugin system with dependency injection and service locator",
+    "Native game function hooking via Reloaded/MinHook backends",
+    "ImGui-based overlay UI rendering with windowing system",
+    "Game data access via Lumina (Excel sheets, raw files)",
+    "In-game chat message interception and printing",
+    "Slash command registration and dispatch",
+    "Inter-Plugin Communication (IPC) via typed call gates",
+    "Client state events (territory changes, login/logout, class changes)",
+    "Texture loading and management from game files or disk",
+    "Toast/notification system for in-game popups"
+  ],
+  "publicApiSurface": [
+    "IDalamudPlugin",
+    "IDalamudPluginInterface",
+    "IPluginConfiguration",
+    "IFramework",
+    "IClientState",
+    "IChatGui",
+    "ICommandManager",
+    "IDataManager",
+    "IGameInteropProvider",
+    "ITextureProvider",
+    "INotificationManager",
+    "IUiBuilder",
+    "ICallGateProvider<TRet>",
+    "ICallGateSubscriber<TRet>",
+    "Hook<T>",
+    "AsmHook",
+    "ISigScanner",
+    "IObjectTable",
+    "ITargetManager",
+    "IPartyList"
+  ]
 }

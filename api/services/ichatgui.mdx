@@ -1,0 +1,298 @@
+---
+title: "IChatGui service reference"
+description: "Print messages to the in-game chat log, intercept and suppress incoming messages, and register clickable chat link handlers from your plugin."
+---
+
+`IChatGui` lets you interact with the native FFXIV chat UI. You can print formatted messages, listen to every chat message the client receives, suppress specific messages before they appear, and embed clickable links that trigger callbacks in your plugin.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IChatGui chatGui)
+{
+    chatGui.ChatMessage += OnChatMessage;
+}
+```
+
+## Delegate signatures
+
+### OnMessageDelegate
+
+```csharp
+public delegate void OnMessageDelegate(
+    XivChatType type,
+    int timestamp,
+    ref SeString sender,
+    ref SeString message,
+    ref bool isHandled);
+```
+
+Used by the `ChatMessage` event. All parameters except `type` and `timestamp` are passed by reference so you can modify them in place.
+
+---
+
+### OnCheckMessageHandledDelegate
+
+```csharp
+public delegate void OnCheckMessageHandledDelegate(
+    XivChatType type,
+    int timestamp,
+    ref SeString sender,
+    ref SeString message,
+    ref bool isHandled);
+```
+
+Used by the `CheckMessageHandled` event. Set `isHandled = true` to prevent a message from appearing in the chat log.
+
+---
+
+### OnMessageHandledDelegate
+
+```csharp
+public delegate void OnMessageHandledDelegate(
+    XivChatType type,
+    int timestamp,
+    SeString sender,
+    SeString message);
+```
+
+Used by the `ChatMessageHandled` event. Parameters are not by reference because the message has already been handled.
+
+---
+
+### OnMessageUnhandledDelegate
+
+```csharp
+public delegate void OnMessageUnhandledDelegate(
+    XivChatType type,
+    int timestamp,
+    SeString sender,
+    SeString message);
+```
+
+Used by the `ChatMessageUnhandled` event. Fires for messages that passed through without being suppressed.
+
+---
+
+### OnLogMessageDelegate
+
+```csharp
+public delegate void OnLogMessageDelegate(ILogMessage message);
+```
+
+Used by the `LogMessage` event. The `ILogMessage` object is only valid for the duration of the callback — do not store a reference to it.
+
+## Events
+
+### ChatMessage
+
+```csharp
+public event OnMessageDelegate ChatMessage;
+```
+
+Fires for every chat message the client receives, before it is displayed. You can read or mutate the sender and message content here.
+
+---
+
+### CheckMessageHandled
+
+```csharp
+public event OnCheckMessageHandledDelegate CheckMessageHandled;
+```
+
+Fires after `ChatMessage`. Set `isHandled = true` to suppress the message entirely — it will not appear in the chat log or trigger `ChatMessageUnhandled`.
+
+---
+
+### ChatMessageHandled
+
+```csharp
+public event OnMessageHandledDelegate ChatMessageHandled;
+```
+
+Fires when a message was suppressed by Dalamud or a plugin (i.e. `isHandled` was set to `true`).
+
+---
+
+### ChatMessageUnhandled
+
+```csharp
+public event OnMessageUnhandledDelegate ChatMessageUnhandled;
+```
+
+Fires when a message was not suppressed and will be displayed normally in the chat log.
+
+---
+
+### LogMessage
+
+```csharp
+public event OnLogMessageDelegate LogMessage;
+```
+
+Fires for chat messages that originate from the game's `LogMessage` Excel sheet (system messages). Do not retain the `ILogMessage` reference after returning from the callback.
+
+## Properties
+
+<ResponseField name="LastLinkedItemId" type="uint">
+  The item ID of the most recently shift-clicked item link in the chat log.
+</ResponseField>
+
+<ResponseField name="LastLinkedItemFlags" type="byte">
+  Flags associated with the most recently linked item (e.g. HQ status).
+</ResponseField>
+
+<ResponseField name="RegisteredLinkHandlers" type="IReadOnlyDictionary<(string PluginName, uint CommandId), Action<uint, SeString>>">
+  A read-only view of all chat link handlers currently registered by all plugins.
+</ResponseField>
+
+## Methods
+
+### Print
+
+```csharp
+public void Print(XivChatEntry chat);
+public void Print(string message, string? messageTag = null, ushort? tagColor = null);
+public void Print(SeString message, string? messageTag = null, ushort? tagColor = null);
+public void Print(ReadOnlySpan<byte> message, string? messageTag = null, ushort? tagColor = null);
+```
+
+Queues a message to appear in the chat log. Messages are sent on the next framework update.
+
+<ParamField path="chat" type="XivChatEntry">
+  A fully constructed chat entry with type, sender, and message payload.
+</ParamField>
+
+<ParamField path="message" type="string / SeString / ReadOnlySpan<byte>" required>
+  The message content to display.
+</ParamField>
+
+<ParamField path="messageTag" type="string?">
+  Optional tag prepended as `[messageTag] ` before the message text.
+</ParamField>
+
+<ParamField path="tagColor" type="ushort?">
+  Optional UI color index applied to the message tag.
+</ParamField>
+
+---
+
+### PrintError
+
+```csharp
+public void PrintError(string message, string? messageTag = null, ushort? tagColor = null);
+public void PrintError(SeString message, string? messageTag = null, ushort? tagColor = null);
+public void PrintError(ReadOnlySpan<byte> message, string? messageTag = null, ushort? tagColor = null);
+```
+
+Queues an error-styled message in the chat log. Behaves identically to `Print` but applies the error chat type formatting.
+
+<ParamField path="message" type="string / SeString / ReadOnlySpan<byte>" required>
+  The error message content to display.
+</ParamField>
+
+<ParamField path="messageTag" type="string?">
+  Optional tag prepended as `[messageTag] ` before the message text.
+</ParamField>
+
+<ParamField path="tagColor" type="ushort?">
+  Optional UI color index applied to the message tag.
+</ParamField>
+
+---
+
+### AddChatLinkHandler
+
+```csharp
+public DalamudLinkPayload AddChatLinkHandler(uint commandId, Action<uint, SeString> commandAction);
+```
+
+Registers a chat link handler and returns a `DalamudLinkPayload` that you embed in an `SeString`. When a player clicks the link, `commandAction` is invoked with the command ID and any additional payload data.
+
+<ParamField path="commandId" type="uint" required>
+  A unique numeric ID for this link handler within your plugin.
+</ParamField>
+
+<ParamField path="commandAction" type="Action<uint, SeString>" required>
+  The callback invoked when the player clicks the link.
+</ParamField>
+
+<ResponseField name="returns" type="DalamudLinkPayload">
+  The payload to embed inside an `SeString` to produce a clickable link.
+</ResponseField>
+
+---
+
+### RemoveChatLinkHandler
+
+```csharp
+public void RemoveChatLinkHandler(uint commandId);
+public void RemoveChatLinkHandler();
+```
+
+Removes a specific chat link handler by ID, or removes all handlers registered by your plugin when called with no arguments.
+
+<ParamField path="commandId" type="uint">
+  The command ID of the handler to remove. Omit to remove all handlers for your plugin.
+</ParamField>
+
+## Example: printing to chat and intercepting messages
+
+```csharp
+using Dalamud.Game.Text;
+using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IChatGui chatGui;
+    private DalamudLinkPayload linkPayload;
+
+    public MyPlugin(IChatGui chatGui)
+    {
+        this.chatGui = chatGui;
+
+        // Register a clickable chat link
+        this.linkPayload = chatGui.AddChatLinkHandler(1, OnLinkClicked);
+
+        // Print a welcome message with the link embedded
+        var message = new SeStringBuilder()
+            .AddText("Hello! Click ")
+            .Add(this.linkPayload)
+            .AddText("here")
+            .Add(RawPayload.LinkTerminator)
+            .AddText(" to trigger the handler.")
+            .Build();
+
+        chatGui.Print(message, "MyPlugin");
+
+        // Subscribe to intercept incoming chat
+        chatGui.CheckMessageHandled += OnCheckMessage;
+    }
+
+    private void OnLinkClicked(uint commandId, SeString message)
+    {
+        chatGui.Print("Link clicked!", "MyPlugin");
+    }
+
+    private void OnCheckMessage(
+        XivChatType type,
+        int timestamp,
+        ref SeString sender,
+        ref SeString message,
+        ref bool isHandled)
+    {
+        // Suppress all messages from a specific sender
+        if (sender.TextValue == "Spammer")
+            isHandled = true;
+    }
+
+    public void Dispose()
+    {
+        chatGui.CheckMessageHandled -= OnCheckMessage;
+        chatGui.RemoveChatLinkHandler();
+    }
+}
+```

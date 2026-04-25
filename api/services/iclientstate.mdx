@@ -1,0 +1,252 @@
+---
+title: "IClientState service reference"
+description: "Read the logged-in character's zone, map, class, and level, and respond to login, logout, territory, and PvP lifecycle events."
+---
+
+`IClientState` exposes the current state of the game client: where the player is, what job they are playing, and whether they are logged in. It also surfaces a rich set of events you can subscribe to in order to react to state transitions.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(IClientState clientState)
+{
+    clientState.Login += OnLogin;
+    clientState.TerritoryChanged += OnTerritoryChanged;
+}
+```
+
+## Events
+
+### Login
+
+```csharp
+public event Action Login;
+```
+
+Fires when a character finishes logging in and the local player object becomes available. Use this event to initialize per-session state in your plugin.
+
+---
+
+### Logout
+
+```csharp
+public delegate void LogoutDelegate(int type, int code);
+public event LogoutDelegate Logout;
+```
+
+Fires when the character begins logging out.
+
+<ParamField path="type" type="int">
+  The type of logout action.
+</ParamField>
+
+<ParamField path="code" type="int">
+  A success or failure code for the logout operation.
+</ParamField>
+
+---
+
+### TerritoryChanged
+
+```csharp
+public event Action<ushort> TerritoryChanged;
+```
+
+Fires when the player moves to a new territory (zone). The argument is the new territory type ID.
+
+---
+
+### MapIdChanged
+
+```csharp
+public event Action<uint> MapIdChanged;
+```
+
+Fires when the active map changes. The argument is the new map ID.
+
+---
+
+### InstanceChanged
+
+```csharp
+public event Action<uint> InstanceChanged;
+```
+
+Fires when the instance number of the current zone changes.
+
+---
+
+### ZoneInit
+
+```csharp
+public event Action<ZoneInitEventArgs> ZoneInit;
+```
+
+Fires when the game initializes a new zone. Provides additional context through `ZoneInitEventArgs`.
+
+---
+
+### ClassJobChanged
+
+```csharp
+public delegate void ClassJobChangeDelegate(uint classJobId);
+public event ClassJobChangeDelegate? ClassJobChanged;
+```
+
+Fires when the character switches to a different class or job.
+
+<ParamField path="classJobId" type="uint">
+  The ID of the newly active ClassJob.
+</ParamField>
+
+---
+
+### LevelChanged
+
+```csharp
+public delegate void LevelChangeDelegate(uint classJobId, uint level);
+public event LevelChangeDelegate? LevelChanged;
+```
+
+Fires when any character level changes, including jobs that are not currently active (such as crafters during a DoH synthesis or jobs in PvP matches).
+
+<ParamField path="classJobId" type="uint">
+  The ID of the ClassJob whose level changed.
+</ParamField>
+
+<ParamField path="level" type="uint">
+  The new level for that ClassJob.
+</ParamField>
+
+---
+
+### EnterPvP / LeavePvP
+
+```csharp
+public event Action EnterPvP;
+public event Action LeavePvP;
+```
+
+Fire when the character enters or leaves a PvP zone.
+
+---
+
+### CfPop
+
+```csharp
+public event Action<Lumina.Excel.Sheets.ContentFinderCondition> CfPop;
+```
+
+Fires when a duty finder queue pops and is ready to enter. The argument is the `ContentFinderCondition` row for the matched duty.
+
+## Properties
+
+<ResponseField name="ClientLanguage" type="ClientLanguage">
+  The display language configured for the game client (e.g. `English`, `Japanese`, `German`, `French`).
+</ResponseField>
+
+<ResponseField name="TerritoryType" type="ushort">
+  The territory type ID of the zone the player currently occupies. Cross-reference with the `TerritoryType` Excel sheet.
+</ResponseField>
+
+<ResponseField name="MapId" type="uint">
+  The map ID currently active. Cross-reference with the `Map` Excel sheet.
+</ResponseField>
+
+<ResponseField name="Instance" type="uint">
+  The instance number of the current zone. Used when multiple copies of an area run simultaneously.
+</ResponseField>
+
+<ResponseField name="IsLoggedIn" type="bool">
+  `true` when a character is fully logged in and the player object is valid.
+</ResponseField>
+
+<ResponseField name="IsPvP" type="bool">
+  `true` when the player is in a PvP zone, including the Wolves' Den.
+</ResponseField>
+
+<ResponseField name="IsPvPExcludingDen" type="bool">
+  `true` when the player is in a PvP zone, excluding the Wolves' Den.
+</ResponseField>
+
+<ResponseField name="IsGPosing" type="bool">
+  `true` when the client is in Group Pose (GPose) mode.
+</ResponseField>
+
+<ResponseField name="LocalPlayer" type="IPlayerCharacter?" deprecated>
+  The local player character object. Deprecated — prefer `IPlayerState` or `IObjectTable.LocalPlayer`.
+</ResponseField>
+
+<ResponseField name="LocalContentId" type="ulong" deprecated>
+  The content ID of the local character. Deprecated — prefer `IPlayerState.ContentId`.
+</ResponseField>
+
+## Methods
+
+### IsClientIdle
+
+```csharp
+public bool IsClientIdle(out ConditionFlag blockingFlag);
+public bool IsClientIdle();
+```
+
+Returns `true` when the client is considered idle — the player is not logged in, not in combat, and not actively doing anything that should not be interrupted.
+
+<ParamField path="blockingFlag" type="ConditionFlag" required>
+  When the client is not idle, this out-parameter is set to the first `ConditionFlag` that prevents the idle state. Set to `0` when idle. Only present on the overload that accepts the out-parameter.
+</ParamField>
+
+<ResponseField name="returns" type="bool">
+  `true` if the client is idle; `false` otherwise.
+</ResponseField>
+
+## Example: reading local player state
+
+```csharp
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IClientState clientState;
+
+    public MyPlugin(IClientState clientState)
+    {
+        this.clientState = clientState;
+        clientState.Login += OnLogin;
+        clientState.TerritoryChanged += OnTerritoryChanged;
+        clientState.ClassJobChanged += OnClassJobChanged;
+        clientState.LevelChanged += OnLevelChanged;
+    }
+
+    private void OnLogin()
+    {
+        // Safe to access game state after login fires
+        ushort zone = clientState.TerritoryType;
+        Plugin.Log.Info($"Logged in. Current zone: {zone}");
+    }
+
+    private void OnTerritoryChanged(ushort territoryId)
+    {
+        Plugin.Log.Info($"Moved to territory {territoryId}");
+    }
+
+    private void OnClassJobChanged(uint classJobId)
+    {
+        Plugin.Log.Info($"Switched to job {classJobId}");
+    }
+
+    private void OnLevelChanged(uint classJobId, uint level)
+    {
+        Plugin.Log.Info($"Job {classJobId} is now level {level}");
+    }
+
+    public void Dispose()
+    {
+        clientState.Login -= OnLogin;
+        clientState.TerritoryChanged -= OnTerritoryChanged;
+        clientState.ClassJobChanged -= OnClassJobChanged;
+        clientState.LevelChanged -= OnLevelChanged;
+    }
+}
+```

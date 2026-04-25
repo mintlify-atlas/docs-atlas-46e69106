@@ -1,0 +1,211 @@
+---
+title: "Accessing FFXIV game data with IDataManager"
+description: "Learn how to read Excel sheets, query client state, iterate the object table, and read targets in FFXIV plugins using Dalamud's data services."
+---
+
+Dalamud exposes FFXIV's internal data through a set of injectable services. `IDataManager` gives you read access to the game's Excel database (items, spells, zones, and thousands of other sheets). `IClientState` reflects the local player's login status, territory, and language. `IObjectTable` lets you iterate every spawned game object in the world, and `ITargetManager` provides the player's current target and other targeting slots.
+
+## Reading Excel sheets with IDataManager
+
+The game stores most of its static data in Excel sheets. Dalamud wraps Lumina to give you strongly-typed access via `IDataManager.GetExcelSheet<T>()`.
+
+<Steps>
+  <Step title="Inject IDataManager">
+    Declare it as a constructor parameter; Dalamud's service container injects it automatically:
+
+    ```csharp
+    public sealed class MyPlugin : IDalamudPlugin
+    {
+        private readonly IDataManager dataManager;
+
+        public MyPlugin(IDataManager dataManager)
+        {
+            this.dataManager = dataManager;
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Get a sheet and read rows">
+    Call `GetExcelSheet<T>()` with the Lumina-generated row type. The returned `ExcelSheet<T>` is iterable and indexable:
+
+    ```csharp
+    using Lumina.Excel.Sheets;
+
+    // Iterate all items
+    var itemSheet = this.dataManager.GetExcelSheet<Item>();
+    foreach (var item in itemSheet)
+    {
+        var name = item.Name.ToString();
+        var stackSize = item.StackSize;
+    }
+
+    // Look up a single row by ID
+    var potion = itemSheet.GetRow(4);   // Potion (row 4)
+    if (potion.HasValue)
+        Plugin.Log.Info($"Item name: {potion.Value.Name}");
+    ```
+  </Step>
+
+  <Step title="Use a specific language">
+    Pass a `ClientLanguage` to retrieve localised data in a language other than the current client language:
+
+    ```csharp
+    using Dalamud.Game;
+
+    var jpSheet = this.dataManager.GetExcelSheet<Item>(ClientLanguage.Japanese);
+    ```
+  </Step>
+</Steps>
+
+### Sheets with subrows
+
+Some sheets use a two-level row/subrow structure (e.g. `Quest`). Use `GetSubrowExcelSheet<T>()` for these:
+
+```csharp
+var questSheet = this.dataManager.GetSubrowExcelSheet<QuestClassJobReward>();
+foreach (var row in questSheet)
+{
+    foreach (var subrow in row)
+    {
+        // process subrow
+    }
+}
+```
+
+### Reading raw game files
+
+For non-Excel resources such as textures or SCD audio files, use `GetFile<T>()`:
+
+```csharp
+var file = this.dataManager.GetFile("ui/icon/000000/000001_hr1.tex");
+```
+
+## Querying client state with IClientState
+
+`IClientState` reflects the game client's runtime state for the logged-in character.
+
+```csharp
+public MyPlugin(IClientState clientState)
+{
+    this.clientState = clientState;
+
+    clientState.Login  += this.OnLogin;
+    clientState.Logout += this.OnLogout;
+    clientState.TerritoryChanged += this.OnTerritoryChanged;
+}
+
+private void OnLogin()
+{
+    Plugin.Log.Info("Player logged in.");
+}
+
+private void OnLogout(int type, int code)
+{
+    Plugin.Log.Info("Player logged out.");
+}
+
+private void OnTerritoryChanged(ushort territoryId)
+{
+    Plugin.Log.Info($"Entered territory {territoryId}");
+}
+```
+
+### Useful IClientState properties
+
+| Property | Type | Description |
+|---|---|---|
+| `IsLoggedIn` | `bool` | Whether a character is currently logged in |
+| `TerritoryType` | `ushort` | Current zone row ID from the `TerritoryType` sheet |
+| `MapId` | `uint` | Current map ID |
+| `IsPvP` | `bool` | Whether the player is in PvP |
+| `IsGPosing` | `bool` | Whether group pose is active |
+| `ClientLanguage` | `ClientLanguage` | Game client language |
+
+<Note>
+`LocalPlayer` on `IClientState` is deprecated as of Dalamud API 15. Prefer `IObjectTable.LocalPlayer` for the local character object, or `IPlayerState` for character stats.
+</Note>
+
+## Iterating game objects with IObjectTable
+
+`IObjectTable` is an enumerable collection of every `IGameObject` currently spawned in the game world.
+
+```csharp
+public MyPlugin(IObjectTable objectTable)
+{
+    this.objectTable = objectTable;
+}
+
+private void ListNearbyPlayers()
+{
+    foreach (IBattleChara player in this.objectTable.PlayerObjects)
+    {
+        Plugin.Log.Info(
+            $"Player: {player.Name}, HP: {player.CurrentHp}/{player.MaxHp}");
+    }
+}
+```
+
+### Object table sub-collections
+
+| Property | Description |
+|---|---|
+| `LocalPlayer` | The local player character (`IPlayerCharacter?`) |
+| `PlayerObjects` | Only `IBattleChara` player characters (no mounts, minions, or accessories) |
+| `CharacterManagerObjects` | All objects in indexes 0–199 including mounts and minions |
+| `ClientObjects` | Indexes 200–448 |
+| `EventObjects` | Indexes 449–488 |
+| `StandObjects` | Indexes 489–628 |
+| `ReactionEventObjects` | Indexes 629–728 |
+
+### Looking up an object by ID
+
+```csharp
+// By game object ID (ulong)
+var obj = this.objectTable.SearchById(gameObjectId);
+
+// By entity ID (uint)
+var entity = this.objectTable.SearchByEntityId(entityId);
+```
+
+## Reading targets with ITargetManager
+
+`ITargetManager` exposes each targeting slot as a readable (and writable) `IGameObject?` property.
+
+```csharp
+public MyPlugin(ITargetManager targetManager)
+{
+    this.targetManager = targetManager;
+}
+
+private void PrintTarget()
+{
+    var target = this.targetManager.Target;
+    if (target is IBattleChara chara)
+    {
+        Plugin.Log.Info($"Target: {chara.Name}, HP: {chara.CurrentHp}");
+    }
+}
+```
+
+### Available targeting slots
+
+| Property | Description |
+|---|---|
+| `Target` | The player's hard target |
+| `MouseOverTarget` | Object the cursor is hovering over |
+| `FocusTarget` | The focus target |
+| `SoftTarget` | Tab-targeting soft target |
+| `PreviousTarget` | The previous hard target |
+| `GPoseTarget` | The GPose target |
+| `MouseOverNameplateTarget` | Nameplate hover target |
+
+You can also **set** any of these properties (or assign `null` to clear them):
+
+```csharp
+// Clear the current target
+this.targetManager.Target = null;
+
+// Programmatically target a specific object
+this.targetManager.Target = someGameObject;
+```

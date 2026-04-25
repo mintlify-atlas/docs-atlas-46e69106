@@ -1,0 +1,80 @@
+---
+title: "Dalamud API changelog and version history"
+description: "Track breaking changes, API level bumps, and release history for the Dalamud FFXIV plugin framework across game patches and expansions."
+---
+
+Dalamud versioning is tightly coupled to Final Fantasy XIV game patches. Because Dalamud operates through memory signatures, native hooks, and game structure offsets, a single game update can invalidate large portions of the API surface. Understanding how Dalamud versions and API levels work helps you maintain your plugin across the FFXIV update cycle.
+
+## How Dalamud versioning works
+
+Dalamud uses a **semantic version** scheme where the **major version number equals the current API level**. As of Dalamud 9.x and later, `PluginManager.DalamudApiLevel` is always set to the major version of the Dalamud assembly:
+
+```csharp
+// From Dalamud/Plugin/Internal/PluginManager.cs
+DalamudApiLevel = typeof(PluginManager).Assembly.GetName().Version!.Major;
+```
+
+This means a Dalamud 10.x release always has API level 10, a 9.x release always has API level 9, and so on.
+
+## The API level system
+
+Every plugin declares a `DalamudApiLevel` in its manifest. Dalamud only loads plugins whose declared API level matches the currently running Dalamud API level. If your plugin targets an older API level, it will not load:
+
+```csharp
+// From Dalamud/Plugin/Internal/Types/LocalPlugin.cs
+public bool IsOutdated => this.manifest.EffectiveApiLevel < PluginManager.DalamudApiLevel;
+```
+
+The manifest field defaults to the current API level when you build against the Dalamud NuGet packages:
+
+```json
+{
+  "DalamudApiLevel": 10,
+  "TestingDalamudApiLevel": 10
+}
+```
+
+You do not typically need to set this manually. Building against **DalamudPackager** or **Dalamud.NET.Sdk** automatically stamps the correct API level into your manifest at build time.
+
+<Note>
+  Dalamud allows plugins that are exactly one API level behind to appear in the plugin installer as "outdated" rather than being hidden entirely. Plugins more than one level behind are not shown to users at all.
+</Note>
+
+## When does the API level change?
+
+API level bumps happen when Dalamud introduces **breaking changes** to the public plugin API. This typically occurs:
+
+- **With major FFXIV expansions** — Expansions frequently change game internals so extensively that Dalamud requires a coordinated rebuild of all plugins.
+- **When service interfaces change** — If a service in `Dalamud.Plugin.Services` (such as `IFramework`, `IGameGui`, or `IObjectTable`) gains, loses, or changes a member in a binary-incompatible way, the API level increments.
+- **When the plugin loading contract changes** — Changes to `IDalamudPlugin`, `IDalamudPluginInterface`, or the dependency injection system that break existing plugin constructors trigger an API level bump.
+
+Minor patches and hotfixes to FFXIV typically do not cause an API level bump, though they may still require signature updates that cause plugins to temporarily stop working until updated.
+
+## How to keep your plugin up to date
+
+When a new API level is released:
+
+1. **Update your NuGet references** to the latest Dalamud packages. The new package version brings updated service interfaces and the correct API level.
+2. **Fix any compile-time errors** caused by renamed or removed API members.
+3. **Re-scan any manual signatures** against the new game binary if you use `ISigScanner` or `[Signature]` attributes directly. The FFXIVClientStructs submodule bundled with each Dalamud release tracks the latest game structures.
+4. **Rebuild and submit** your updated plugin to your repository.
+
+<Warning>
+  Do not ship a plugin with a hardcoded `DalamudApiLevel` lower than the current level. Dalamud will refuse to load it for standard users, and the plugin installer will display it as outdated. Always let DalamudPackager or Dalamud.NET.Sdk manage this value automatically.
+</Warning>
+
+## Testing versions and opt-in testing
+
+Plugins can declare a separate `TestingDalamudApiLevel` for builds that target a pre-release API level. Users who opt into testing in the plugin installer can receive these builds before the API level is considered stable. This allows plugin authors to prepare updated builds before a major game patch ships.
+
+## Full release history
+
+The full version history, per-release changelogs, and associated FFXIVClientStructs submodule commits are published on GitHub. Each release tag corresponds to a specific Dalamud version and includes a list of merged pull requests.
+
+<Note>
+  Browse the complete Dalamud release history and per-release changelogs at [github.com/goatcorp/Dalamud/releases](https://github.com/goatcorp/Dalamud/releases).
+</Note>
+
+<Tip>
+  Join the [goatcorp Discord](https://discord.gg/3NMcUV5) and watch the `#announcements` channel. Every Dalamud release posts a summary of changes and notes whether plugins need to be rebuilt, so you can react quickly when a game patch lands.
+</Tip>

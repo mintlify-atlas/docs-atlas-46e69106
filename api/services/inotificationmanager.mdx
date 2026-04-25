@@ -1,0 +1,212 @@
+---
+title: "INotificationManager service reference"
+description: "Display toast-style ImGui notifications to the player with configurable duration, type, icon, progress bar, and dismissal behavior from your plugin."
+---
+
+`INotificationManager` lets you display toast-style overlay notifications in the Dalamud ImGui layer. Each call to `AddNotification` immediately queues a notification and returns an `IActiveNotification` handle you can use to update or dismiss it programmatically.
+
+Inject the service via your plugin constructor:
+
+```csharp
+public MyPlugin(INotificationManager notificationManager)
+{
+    notificationManager.AddNotification(new Notification
+    {
+        Content = "Plugin loaded successfully.",
+        Type = NotificationType.Success,
+    });
+}
+```
+
+## Methods
+
+### AddNotification
+
+```csharp
+public IActiveNotification AddNotification(Notification notification);
+```
+
+Adds and immediately displays a new notification.
+
+<ParamField path="notification" type="Notification" required>
+  A `Notification` record describing the content, appearance, and lifetime of the notification.
+</ParamField>
+
+<ResponseField name="returns" type="IActiveNotification">
+  The active notification handle. Use it to update content, extend duration, or dismiss the notification programmatically.
+</ResponseField>
+
+## Notification class
+
+`Notification` is a `sealed record` that acts as a blueprint for a new notification.
+
+<ResponseField name="Content" type="string">
+  The main body text of the notification. Defaults to an empty string.
+</ResponseField>
+
+<ResponseField name="Title" type="string?">
+  An optional title shown above the content. Defaults to `null` (no title displayed).
+</ResponseField>
+
+<ResponseField name="MinimizedText" type="string?">
+  Text shown in the notification when it is minimized to a compact strip. Defaults to `null`.
+</ResponseField>
+
+<ResponseField name="Type" type="NotificationType">
+  Controls the accent color and default icon of the notification. Values: `None`, `Info`, `Warning`, `Error`, `Success`. Defaults to `None`.
+</ResponseField>
+
+<ResponseField name="Icon" type="INotificationIcon?">
+  An optional custom icon to display. Overrides the type-based default icon.
+</ResponseField>
+
+<ResponseField name="IconTexture" type="ISharedImmediateTexture?">
+  An optional custom texture to use as the notification icon.
+</ResponseField>
+
+<ResponseField name="InitialDuration" type="TimeSpan">
+  How long the notification stays visible without user interaction. Defaults to `Notification.DefaultDuration`.
+</ResponseField>
+
+<ResponseField name="ExtensionDurationSinceLastInterest" type="TimeSpan">
+  How long to extend the notification after the player moves their cursor over it. Defaults to `Notification.DefaultDuration`.
+</ResponseField>
+
+<ResponseField name="HardExpiry" type="DateTime">
+  An absolute wall-clock time after which the notification is removed regardless of other settings. Defaults to `DateTime.MaxValue` (never expires from this alone).
+</ResponseField>
+
+<ResponseField name="ShowIndeterminateIfNoExpiry" type="bool">
+  When `true` and the notification has no expiry, an indeterminate progress animation is shown. Defaults to `true`.
+</ResponseField>
+
+<ResponseField name="Progress" type="float">
+  A value between `0.0` and `1.0` that controls the progress bar fill. Set to a value less than `1.0` to display a partial progress bar. Defaults to `1.0` (full / hidden bar).
+</ResponseField>
+
+<ResponseField name="RespectUiHidden" type="bool">
+  When `true`, the notification is hidden while the game UI is hidden (e.g. during screenshots). Defaults to `true`.
+</ResponseField>
+
+<ResponseField name="Minimized" type="bool">
+  Whether the notification starts in the minimized strip view. Defaults to `true`.
+</ResponseField>
+
+<ResponseField name="UserDismissable" type="bool">
+  Whether the player can manually dismiss the notification by clicking the close button. Defaults to `true`.
+</ResponseField>
+
+## IActiveNotification
+
+`IActiveNotification` extends `INotification` and represents a notification that has already been added to the display queue. Its writable properties (inherited from `INotification`) can be updated after the fact and the UI will reflect the change.
+
+<ResponseField name="Id" type="long">
+  A unique ID assigned to this notification at creation time.
+</ResponseField>
+
+<ResponseField name="CreatedAt" type="DateTime">
+  The wall-clock time at which the notification was created.
+</ResponseField>
+
+<ResponseField name="EffectiveExpiry" type="DateTime">
+  The current computed expiry, factoring in user interaction and property changes.
+</ResponseField>
+
+<ResponseField name="DismissReason" type="NotificationDismissReason?">
+  `null` while the notification is still visible. Set to the dismissal reason when the notification is removed or the hide animation starts.
+</ResponseField>
+
+### Events on IActiveNotification
+
+<ResponseField name="Dismiss" type="event Action<INotificationDismissArgs>">
+  Fires when the notification is dismissed. Not called when dismissed after plugin unload.
+</ResponseField>
+
+<ResponseField name="Click" type="event Action<INotificationClickArgs>">
+  Fires when the player clicks on the notification body.
+</ResponseField>
+
+<ResponseField name="DrawActions" type="event Action<INotificationDrawArgs>">
+  Fires each frame while the notification's action bar is rendered, allowing you to draw custom ImGui controls inside the notification.
+</ResponseField>
+
+### Methods on IActiveNotification
+
+<ResponseField name="DismissNow()" type="void">
+  Immediately dismisses the notification. Safe to call on an already-dismissed notification.
+</ResponseField>
+
+<ResponseField name="ExtendBy(TimeSpan)" type="void">
+  Extends the notification's lifetime by the given amount. Does not override `HardExpiry`.
+</ResponseField>
+
+## Example: adding notifications
+
+```csharp
+using Dalamud.Interface.ImGuiNotification;
+using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly INotificationManager notificationManager;
+
+    public MyPlugin(INotificationManager notificationManager)
+    {
+        this.notificationManager = notificationManager;
+
+        // Simple success toast
+        notificationManager.AddNotification(new Notification
+        {
+            Content = "Plugin loaded successfully.",
+            Title = "MyPlugin",
+            Type = NotificationType.Success,
+        });
+    }
+
+    public void ShowProgressNotification()
+    {
+        // Start a notification with a progress bar at 0%
+        var active = notificationManager.AddNotification(new Notification
+        {
+            Title = "Downloading data",
+            Content = "Starting download...",
+            Type = NotificationType.Info,
+            Progress = 0f,
+            InitialDuration = TimeSpan.MaxValue,  // keep open until done
+            UserDismissable = false,
+        });
+
+        // Update progress from a background task
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            for (int i = 1; i <= 10; i++)
+            {
+                await System.Threading.Tasks.Task.Delay(500);
+                active.Progress = i / 10f;
+                active.Content = $"Downloading... {i * 10}%";
+            }
+
+            active.Content = "Download complete.";
+            active.Type = NotificationType.Success;
+            active.InitialDuration = System.TimeSpan.FromSeconds(3);
+        });
+
+        // Respond to the player clicking on the notification
+        active.Click += args =>
+        {
+            Plugin.Log.Info("Notification clicked.");
+        };
+
+        // Clean up when the notification is dismissed
+        active.Dismiss += args =>
+        {
+            Plugin.Log.Info($"Notification dismissed: {args.Reason}");
+        };
+    }
+}
+```
+
+<Tip>
+  You can update `IActiveNotification` properties such as `Content`, `Progress`, and `Type` at any time after calling `AddNotification`. The notification UI reads the current values each frame.
+</Tip>

@@ -1,0 +1,231 @@
+---
+title: 'Plugin lifecycle and event model'
+description: 'Understand the full lifecycle of a Dalamud plugin from load through dispose, per-frame updates, thread safety, and responding to interface events.'
+---
+
+A Dalamud plugin has a well-defined lifecycle that begins when Dalamud injects your assembly and ends when it calls `Dispose` on your plugin class. Understanding this lifecycle — and the threading model that runs beneath it — is essential to writing stable plugins that do not crash the game or leak resources.
+
+## The full lifecycle
+
+<Steps>
+  <Step title="Load and construct">
+    Dalamud creates an `AssemblyLoadContext` for your plugin, then instantiates your plugin class by resolving constructor parameters from the service container. Your constructor is the only initialization entry point — there is no separate `Initialize` method. All service wiring, event subscriptions, and one-time setup happen here.
+
+    ```csharp
+    public sealed class MyPlugin : IDalamudPlugin
+    {
+        private readonly IFramework framework;
+        private readonly IClientState clientState;
+
+        public MyPlugin(IFramework framework, IClientState clientState)
+        {
+            this.framework = framework;
+            this.clientState = clientState;
+
+            // Subscribe to events in the constructor.
+            this.framework.Update += this.OnUpdate;
+            this.clientState.Login += this.OnLogin;
+        }
+    }
+    ```
+  </Step>
+  <Step title="Per-frame updates via IFramework.Update">
+    After your constructor returns, Dalamud starts firing `IFramework.Update` every time the game updates its internal state — roughly once per rendered frame at the game's target framerate. This is your primary hook for polling game state, running timers, and dispatching work that must happen on the framework thread.
+
+    ```csharp
+    private void OnUpdate(IFramework fw)
+    {
+        // fw.UpdateDelta contains the time elapsed since the last tick.
+        var delta = fw.UpdateDelta;
+        // Poll game state or run per-frame logic here.
+    }
+    ```
+  </Step>
+  <Step title="Event-driven responses">
+    Beyond `Update`, individual services expose events for specific game occurrences (territory changes, login/logout, chat messages, addon lifecycle, etc.). Subscribe in the constructor, unsubscribe in `Dispose`.
+  </Step>
+  <Step title="Dispose">
+    When the plugin is unloaded — due to user action, a game exit, or a Dalamud reload — Dalamud calls `Dispose()` on your plugin class. You must release every resource you acquired during initialization: unsubscribe all events, cancel background tasks, and free unmanaged handles. After `Dispose` returns, Dalamud tears down the `AssemblyLoadContext`.
+  </Step>
+</Steps>
+
+## Proper dispose pattern
+
+The most common source of stability issues in Dalamud plugins is incomplete `Dispose` implementations. A robust `Dispose` should mirror the constructor exactly — every subscription made during construction must be removed during disposal.
+
+```csharp
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IFramework framework;
+    private readonly IClientState clientState;
+    private readonly ICommandManager commandManager;
+
+    public MyPlugin(
+        IFramework framework,
+        IClientState clientState,
+        ICommandManager commandManager)
+    {
+        this.framework = framework;
+        this.clientState = clientState;
+        this.commandManager = commandManager;
+
+        this.framework.Update += this.OnUpdate;
+        this.clientState.Login += this.OnLogin;
+        this.clientState.Logout += this.OnLogout;
+        this.commandManager.AddHandler("/myplugin", new CommandInfo(this.OnCommand)
+        {
+            HelpMessage = "Opens the MyPlugin window.",
+        });
+    }
+
+    private void OnUpdate(IFramework fw) { /* ... */ }
+    private void OnLogin() { /* ... */ }
+    private void OnLogout(int type, int code) { /* ... */ }
+    private void OnCommand(string command, string args) { /* ... */ }
+
+    public void Dispose()
+    {
+        // Mirror every subscription from the constructor.
+        this.commandManager.RemoveHandler("/myplugin");
+        this.clientState.Logout -= this.OnLogout;
+        this.clientState.Login -= this.OnLogin;
+        this.framework.Update -= this.OnUpdate;
+    }
+}
+```
+
+## Thread safety and the framework thread
+
+The game's core state is owned by a single thread — the **framework update thread**. Reading from or writing to game memory from any other thread can corrupt state or cause crashes.
+
+<Warning>
+Do not read from game objects (player character, object table, target manager, etc.) from background threads, `Task.Run` callbacks, or `async` continuations that run off the framework thread. Always marshal access back to the framework thread using `IFramework.RunOnFrameworkThread` or `IFramework.Run`.
+</Warning>
+
+Use `IFramework.IsInFrameworkUpdateThread` to assert that you are on the correct thread when debugging:
+
+```csharp
+// Safe: called from an IFramework.Update handler — already on the framework thread.
+private void OnUpdate(IFramework fw)
+{
+    // Direct game state access is safe here.
+    var isLoggedIn = this.clientState.IsLoggedIn;
+}
+
+// Safe: dispatch to framework thread from a background task.
+private async Task FetchAndApplyAsync()
+{
+    var data = await FetchRemoteDataAsync(); // Runs off framework thread — fine.
+
+    // Marshal the result back to the framework thread before touching game state.
+    await this.framework.RunOnFrameworkThread(() =>
+    {
+        ApplyDataToGameState(data);
+    });
+}
+```
+
+### Choosing between Run and RunOnFrameworkThread
+
+`IFramework` provides two methods for dispatching work to the framework thread:
+
+<AccordionGroup>
+  <Accordion title="IFramework.Run(action)">
+    Runs `action` on the next framework tick using the framework thread's `TaskScheduler`. Subsequent `await` expressions inside an `async` callback continue on the framework thread. Use this when you need a series of `await` calls to all execute on the framework thread.
+
+    ```csharp
+    await framework.Run(async () =>
+    {
+        DoSomethingOnFrameworkThread();
+        await Task.Delay(100); // WARNING: continuation may still be on framework thread.
+        DoMoreWork();          // This could deadlock — see below.
+    });
+    ```
+
+    Do not call `Task.Wait()` or access `.Result` from inside a `Run` callback; starting synchronous waits on the framework thread will deadlock the game.
+  </Accordion>
+  <Accordion title="IFramework.RunOnFrameworkThread(action)">
+    Runs `action` immediately if already on the framework thread, or queues it for the next tick otherwise. Unlike `Run`, subsequent `await` expressions do **not** continue on the framework thread. Use this when you need a single synchronous block of game-state work.
+
+    ```csharp
+    await framework.RunOnFrameworkThread(() =>
+    {
+        // This block runs on the framework thread.
+        var hp = GetPlayerHp();
+        ApplyHpChange(hp);
+    });
+    // Execution continues on a thread pool thread after the above completes.
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## IDalamudPluginInterface events
+
+`IDalamudPluginInterface` exposes two events that let your plugin react to Dalamud-level changes rather than game-level changes.
+
+### LanguageChanged
+
+Fired when the user changes the Dalamud UI language in settings. The event provides a two-letter ISO language code. Use it to reload your plugin's localization strings without requiring a plugin restart.
+
+```csharp
+public MyPlugin(IDalamudPluginInterface pi)
+{
+    this.pi = pi;
+    pi.LanguageChanged += this.OnLanguageChanged;
+    this.LoadLocalization(pi.UiLanguage);
+}
+
+private void OnLanguageChanged(string langCode)
+{
+    this.LoadLocalization(langCode);
+}
+
+private void LoadLocalization(string langCode)
+{
+    // Load strings for langCode from your plugin's loc directory.
+    var locDir = this.pi.GetPluginLocDirectory();
+}
+```
+
+### ActivePluginsChanged
+
+Fired when a plugin is loaded, unloaded, enabled, or disabled in the running session. The event args provide a `PluginListInvalidationKind` (the nature of the change) and `AffectedInternalNames` (which plugins were involved).
+
+This is useful when your plugin communicates with other plugins via the IPC system and needs to know when a dependency becomes available or goes away.
+
+```csharp
+public MyPlugin(IDalamudPluginInterface pi)
+{
+    pi.ActivePluginsChanged += this.OnActivePluginsChanged;
+}
+
+private void OnActivePluginsChanged(IActivePluginsChangedEventArgs args)
+{
+    if (args.AffectedInternalNames.Contains("SomeDependencyPlugin"))
+    {
+        // Re-subscribe to IPC or adjust behavior based on whether the
+        // dependency is now loaded or unloaded.
+        this.ReconnectIpc();
+    }
+}
+```
+
+## Delaying and scheduling work
+
+If you need to run something after a fixed number of framework ticks rather than immediately, use `IFramework.DelayTicks` or `IFramework.RunOnTick`:
+
+```csharp
+// Run an action after 60 framework ticks (~1 second at 60fps).
+await framework.RunOnTick(() =>
+{
+    DoDelayedWork();
+}, delayTicks: 60);
+
+// Alternatively, delay by wall-clock time.
+await framework.RunOnTick(() =>
+{
+    DoDelayedWork();
+}, delay: TimeSpan.FromSeconds(1));
+```
+
+Both methods accept an optional `CancellationToken` so you can cancel pending work during `Dispose`.

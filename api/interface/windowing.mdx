@@ -1,0 +1,423 @@
+---
+title: "WindowSystem and Window classes reference"
+description: "Reference for Dalamud's WindowSystem and Window base class — the recommended abstraction for managing and rendering ImGui windows in plugins."
+---
+
+The `WindowSystem` and `Window` classes provide a structured abstraction over raw ImGui window management. Instead of calling `ImGui.Begin` and `ImGui.End` yourself, you subclass `Window`, override its virtual methods, and register your window with a `WindowSystem`. Dalamud then handles focus management, escape-key behavior, fade animations, sound effects, pinning, click-through mode, and background blur.
+
+You drive the whole system by calling `WindowSystem.Draw()` inside your `IUiBuilder.Draw` handler.
+
+---
+
+## WindowSystem
+
+`WindowSystem` is a container that manages a collection of `Window` instances and draws them each frame.
+
+### Constructor
+
+```csharp
+public WindowSystem(string? imNamespace = null)
+```
+
+<ParamField path="imNamespace" type="string">
+  An optional namespace string pushed as an ImGui ID scope before drawing all windows. Use your plugin's internal name to avoid ID collisions with other plugins. Example: `"MyPlugin"`.
+</ParamField>
+
+### Properties
+
+<ResponseField name="Namespace" type="string?">
+  The ImGui ID namespace for this `WindowSystem`. You can change this after construction.
+</ResponseField>
+
+<ResponseField name="Windows" type="IReadOnlyList&lt;Window&gt;">
+  A read-only view of all windows currently registered with this `WindowSystem`.
+</ResponseField>
+
+<ResponseField name="HasAnyFocus" type="bool">
+  `true` when at least one window in this `WindowSystem` currently has ImGui focus.
+</ResponseField>
+
+<ResponseField name="HasAnyWindowSystemFocus" type="bool (static)">
+  `true` when any window in any `WindowSystem` across all plugins has focus. Useful for suppressing game input when the user is interacting with plugin UI.
+</ResponseField>
+
+<ResponseField name="FocusedWindowSystemNamespace" type="string (static)">
+  The namespace of the `WindowSystem` whose window currently has focus.
+</ResponseField>
+
+<ResponseField name="TimeSinceLastAnyFocus" type="TimeSpan (static)">
+  The elapsed time since any window in any `WindowSystem` last had focus.
+</ResponseField>
+
+### Methods
+
+#### AddWindow
+
+```csharp
+public void AddWindow(Window window)
+```
+
+Registers a window with this `WindowSystem`. The `WindowSystem` does not take ownership of the window — you are responsible for keeping a reference and disposing it if needed.
+
+<ParamField path="window" type="Window" required>
+  The window to register. Each window's `WindowName` must be unique within a `WindowSystem`. Throws `ArgumentException` if a window with the same name is already registered.
+</ParamField>
+
+#### RemoveWindow
+
+```csharp
+public void RemoveWindow(Window window)
+```
+
+Unregisters a window. The window is not disposed. Throws `ArgumentException` if the window is not registered.
+
+<ParamField path="window" type="Window" required>
+  The window to remove.
+</ParamField>
+
+#### RemoveAllWindows
+
+```csharp
+public void RemoveAllWindows()
+```
+
+Removes all registered windows without disposing them.
+
+#### Draw
+
+```csharp
+public void Draw()
+```
+
+Iterates all registered windows and calls their internal draw logic. Call this from your `IUiBuilder.Draw` handler every frame. Windows with `IsOpen = false` are skipped (after triggering `OnClose` if they were just closed).
+
+---
+
+## Window
+
+`Window` is the abstract base class for all plugin windows managed by a `WindowSystem`. Subclass it, implement `Draw()`, and register it with a `WindowSystem`.
+
+### Constructor
+
+```csharp
+protected Window(string name, ImGuiWindowFlags flags = ImGuiWindowFlags.None, bool forceMainWindow = false)
+```
+
+<ParamField path="name" type="string" required>
+  The window's name and ImGui ID. If you want multiple windows with the same visible title, append a unique ID after `###` (for example, `"Settings###MyPlugin_Settings"`). The part after `###` is the actual ImGui ID; it won't appear in the title bar.
+</ParamField>
+
+<ParamField path="flags" type="ImGuiWindowFlags">
+  Initial window flags. You can change `Flags` at any time before or during drawing.
+</ParamField>
+
+<ParamField path="forceMainWindow" type="bool">
+  When `true`, forces the window to stay inside the main game viewport. Useful for windows that must not appear on secondary monitors.
+</ParamField>
+
+### State properties
+
+<ResponseField name="IsOpen" type="bool">
+  Controls whether the window is rendered. Set to `true` to show the window, `false` to hide it. Changing this from `false` to `true` triggers `OnOpen`; changing from `true` to `false` triggers `OnClose`.
+</ResponseField>
+
+<ResponseField name="WindowName" type="string">
+  The window's name and ImGui ID. Changing this after the window has been drawn resets its position and size state.
+</ResponseField>
+
+<ResponseField name="IsFocused" type="bool">
+  `true` when the window (or any of its child windows) currently has ImGui focus. Read-only; updated each frame by `WindowSystem.Draw()`.
+</ResponseField>
+
+<ResponseField name="IsPinned" type="bool">
+  `true` when the user has pinned this window. Pinned windows cannot be moved or resized, and the Escape key will not close them.
+</ResponseField>
+
+<ResponseField name="IsClickthrough" type="bool">
+  `true` when the user has made this window click-through. Click-through windows receive no mouse input.
+</ResponseField>
+
+### Layout properties
+
+<ResponseField name="Flags" type="ImGuiWindowFlags">
+  ImGui window flags controlling window behavior (scrollbar, title bar, resize, etc.). You can update these each frame inside `PreDraw()`.
+</ResponseField>
+
+<ResponseField name="Position" type="Vector2?">
+  Sets the initial or conditional position of the window. Apply `PositionCondition` to control when this takes effect.
+</ResponseField>
+
+<ResponseField name="PositionCondition" type="ImGuiCond">
+  The condition under which `Position` is applied (e.g., `ImGuiCond.FirstUseEver`, `ImGuiCond.Always`).
+</ResponseField>
+
+<ResponseField name="Size" type="Vector2?">
+  Sets the initial or conditional size of the window, in logical pixels. The value is automatically scaled by the global scale factor. Apply `SizeCondition` to control when this takes effect.
+</ResponseField>
+
+<ResponseField name="SizeCondition" type="ImGuiCond">
+  The condition under which `Size` is applied.
+</ResponseField>
+
+<ResponseField name="SizeConstraints" type="WindowSizeConstraints?">
+  Minimum and maximum window size constraints. Both values are automatically scaled by the global scale factor.
+</ResponseField>
+
+<ResponseField name="Collapsed" type="bool?">
+  Sets the initial or conditional collapsed state of the window. Apply `CollapsedCondition` to control when this takes effect.
+</ResponseField>
+
+<ResponseField name="CollapsedCondition" type="ImGuiCond">
+  The condition under which `Collapsed` is applied.
+</ResponseField>
+
+<ResponseField name="BgAlpha" type="float?">
+  Overrides the window background alpha. `null` uses the current ImGui style value.
+</ResponseField>
+
+<ResponseField name="ForceMainWindow" type="bool">
+  When `true`, the window is forced into the main game viewport.
+</ResponseField>
+
+### Behavior properties
+
+<ResponseField name="ShowCloseButton" type="bool">
+  When `true` (the default), a close button appears in the title bar. Setting this to `false` hides the button; the user can still close the window via Escape if `RespectCloseHotkey` is `true`.
+</ResponseField>
+
+<ResponseField name="RespectCloseHotkey" type="bool">
+  When `true` (the default), pressing Escape while the window is focused closes it. Pinned windows are exempt.
+</ResponseField>
+
+<ResponseField name="AllowPinning" type="bool">
+  When `true` (the default), the window's title bar context menu includes a **Pin Window** option.
+</ResponseField>
+
+<ResponseField name="AllowClickthrough" type="bool">
+  When `true` (the default), the title bar context menu includes a **Make clickthrough** option.
+</ResponseField>
+
+<ResponseField name="AllowBackgroundBlur" type="bool">
+  When `true` (the default), a background blur effect is applied behind the window if the user has enabled it globally.
+</ResponseField>
+
+<ResponseField name="DisableWindowSounds" type="bool">
+  When `true`, suppresses the open/close sound effects for this window. Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="OnOpenSfxId" type="uint">
+  Sound effect ID played when the window opens. Defaults to `23`.
+</ResponseField>
+
+<ResponseField name="OnCloseSfxId" type="uint">
+  Sound effect ID played when the window closes. Defaults to `24`.
+</ResponseField>
+
+<ResponseField name="DisableFadeInFadeOut" type="bool">
+  When `true`, disables the built-in fade-in and fade-out animations regardless of user preference. Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="Namespace" type="string?">
+  An optional ImGui ID namespace pushed for this specific window. Leave `null` to inherit the `WindowSystem`'s namespace.
+</ResponseField>
+
+<ResponseField name="TitleBarButtons" type="List&lt;TitleBarButton&gt;">
+  A list of custom buttons rendered in the title bar to the left of the system buttons. Each `TitleBarButton` exposes `Icon`, `IconColor`, `IconOffset`, `ShowTooltip`, `Click`, `Priority`, and `AvailableClickthrough`.
+</ResponseField>
+
+### Public methods
+
+#### Toggle
+
+```csharp
+public void Toggle()
+```
+
+Flips `IsOpen` between `true` and `false`. Equivalent to `IsOpen ^= true`.
+
+#### BringToFront
+
+```csharp
+public void BringToFront()
+```
+
+Requests that this window is brought to the front on the next frame. Has no effect if the window is not open.
+
+### Virtual methods
+
+Override these in your subclass to customize window behavior.
+
+#### Draw (abstract)
+
+```csharp
+public abstract void Draw();
+```
+
+**Required.** Called every frame when the window is open and `DrawConditions()` returns `true`. You do not need to call `ImGui.Begin` or `ImGui.End` — the `WindowSystem` handles that for you. All ImGui calls here are scoped to the window's content area.
+
+#### Update
+
+```csharp
+public virtual void Update()
+```
+
+Called every frame, even when the window is collapsed. Use this for logic that must run regardless of whether the content area is visible.
+
+#### PreOpenCheck
+
+```csharp
+public virtual void PreOpenCheck()
+```
+
+Called before the window's open-state is evaluated. Use this to programmatically control `IsOpen` before any rendering begins.
+
+#### DrawConditions
+
+```csharp
+public virtual bool DrawConditions()
+```
+
+Returns `true` by default. Override to add additional conditions for rendering, beyond just `IsOpen`. When this returns `false`, the window is not drawn and `OnClose` is not triggered — it simply skips rendering for that frame.
+
+#### PreDraw
+
+```csharp
+public virtual void PreDraw()
+```
+
+Called after `DrawConditions` passes, before `ImGui.Begin`. Use this to push style variables or colors with `ImGui.PushStyleVar`/`ImGui.PushStyleColor`. The default implementation applies the internal opacity if the user has adjusted it.
+
+#### PostDraw
+
+```csharp
+public virtual void PostDraw()
+```
+
+Called after `ImGui.End`. Use this to pop any style variables or colors pushed in `PreDraw`. The default implementation pops the internal opacity.
+
+#### OnOpen
+
+```csharp
+public virtual void OnOpen()
+```
+
+Called once when `IsOpen` transitions from `false` to `true`. Use this to reset state or start animations.
+
+#### OnClose
+
+```csharp
+public virtual void OnClose()
+```
+
+Called once when `IsOpen` transitions from `true` to `false`. Do not dispose the window here if fade-out animations are enabled — use `OnSafeToRemove` instead.
+
+#### OnSafeToRemove
+
+```csharp
+public virtual void OnSafeToRemove()
+```
+
+Called once the window's fade-out animation has completed and it is safe to remove or dispose the window from the system. If fade animations are disabled, this is called immediately after `OnClose`.
+
+### WindowSizeConstraints struct
+
+```csharp
+public struct WindowSizeConstraints
+{
+    public Vector2 MinimumSize { get; set; }
+    public Vector2 MaximumSize { get; set; }
+}
+```
+
+Defines the minimum and maximum size for a window. Both values are automatically multiplied by `ImGuiHelpers.GlobalScale` before being passed to ImGui.
+
+---
+
+## Complete example
+
+The following example creates a custom window subclass and integrates it with `IUiBuilder`.
+
+```csharp
+using System.Numerics;
+using Dalamud.Interface.Windowing;
+using Dalamud.Plugin;
+using ImGuiNET;
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly WindowSystem windowSystem;
+    private readonly GreetingWindow greetingWindow;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        windowSystem = new WindowSystem("MyPlugin");
+
+        greetingWindow = new GreetingWindow();
+        windowSystem.AddWindow(greetingWindow);
+
+        // Hook into the draw and open-main-ui events
+        pluginInterface.UiBuilder.Draw += windowSystem.Draw;
+        pluginInterface.UiBuilder.OpenMainUi += OnOpenMainUi;
+    }
+
+    private void OnOpenMainUi() => greetingWindow.IsOpen = true;
+
+    public void Dispose()
+    {
+        windowSystem.RemoveAllWindows();
+        greetingWindow.Dispose();
+    }
+}
+
+public sealed class GreetingWindow : Window, IDisposable
+{
+    private int clickCount;
+
+    public GreetingWindow()
+        : base("Greeting##MyPlugin", ImGuiWindowFlags.None)
+    {
+        // Set a default size, applied only on first use
+        Size = new Vector2(300, 120);
+        SizeCondition = ImGuiCond.FirstUseEver;
+
+        // Constrain how small the window can get
+        SizeConstraints = new WindowSizeConstraints
+        {
+            MinimumSize = new Vector2(200, 80),
+            MaximumSize = new Vector2(600, 300),
+        };
+    }
+
+    public override void OnOpen()
+    {
+        // Reset state each time the window is opened
+        clickCount = 0;
+    }
+
+    public override void Draw()
+    {
+        ImGui.Text($"Hello! You have clicked {clickCount} time(s).");
+
+        if (ImGui.Button("Click me"))
+            clickCount++;
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Close"))
+            IsOpen = false;
+    }
+
+    public void Dispose()
+    {
+        // Release any managed resources here
+    }
+}
+```
+
+<Tip>
+Call `WindowSystem.Draw()` directly as the `IUiBuilder.Draw` delegate rather than wrapping it in a lambda. This avoids an unnecessary allocation each frame: `pluginInterface.UiBuilder.Draw += windowSystem.Draw`.
+</Tip>
+
+<Note>
+The `WindowSystem` does not own your `Window` instances and will not dispose them. If your window implements `IDisposable`, dispose it yourself in your plugin's `Dispose` method after calling `RemoveAllWindows`.
+</Note>

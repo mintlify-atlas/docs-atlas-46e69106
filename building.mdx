@@ -1,0 +1,119 @@
+---
+title: "Building Dalamud from source"
+description: "Clone, configure, and compile the Dalamud framework itself for contributors who want to work on the core runtime, not just write plugins."
+---
+
+This page is for developers who want to contribute to Dalamud itself — fixing bugs, adding new services, or improving the core framework. If you only want to write a plugin, see the [quickstart guide](/quickstart) instead.
+
+<Warning>
+  End users should never build Dalamud manually. Download [XIVLauncher](https://goatcorp.github.io/) and it will manage the correct Dalamud version for you automatically.
+</Warning>
+
+## Prerequisites
+
+Dalamud targets `net10.0-windows` and requires the following tools:
+
+- **.NET 10 SDK** — version `10.0.0` or later with pre-release allowed (see `global.json`). Download from [dot.net](https://dotnet.microsoft.com/download).
+- **Visual Studio 2022** with the **Desktop development with C++** workload — required to compile the native C++ projects (`Dalamud.Boot`, `DalamudCrashHandler`, `cimgui`, `cimplot`, `cimguizmo`).
+- **Git** with submodule support.
+
+## Clone the repository
+
+Clone the repository and initialise all submodules. Dalamud vendors several libraries (FFXIVClientStructs, ImGui bindings, and others) as Git submodules:
+
+```bash
+git clone https://github.com/goatcorp/Dalamud
+cd Dalamud
+git submodule update --init --recursive
+```
+
+## Solution structure
+
+The solution (`Dalamud.sln`) contains these main projects:
+
+| Project | Language | Purpose |
+|---|---|---|
+| `Dalamud` | C# | Core API, service container, plugin framework |
+| `Dalamud.Boot` | C++ | Loads the .NET runtime into the game process |
+| `Dalamud.Injector` | C# | DLL injection into the FFXIV process |
+| `Dalamud.Injector.Boot` | C++ | Loads the runtime into the launcher process |
+| `DalamudCrashHandler` | C++ | Out-of-process crash reporter |
+| `Dalamud.CorePlugin` | C# | Internal testbed plugin for prototyping Dalamud features |
+| `Dalamud.Test` | C# | Unit tests |
+| `build` | C# | Nuke build definitions |
+
+## Build with Nuke
+
+Dalamud uses [Nuke](https://nuke.build/) as its build system. The `build/DalamudBuild.cs` file defines all build targets. You do not need to install Nuke globally — the bootstrap scripts handle it.
+
+<Steps>
+  <Step title="Run the build script">
+    On Windows, run:
+
+    ```cmd
+    build.cmd
+    ```
+
+    On Linux or macOS (for documentation-only builds that skip native targets):
+
+    ```bash
+    ./build.sh
+    ```
+
+    The bootstrap script reads `global.json`, installs the correct .NET SDK version if needed, compiles the Nuke build project, and then executes it. The default target is `Compile`, which builds all managed and native projects.
+  </Step>
+
+  <Step title="Available build targets">
+    You can pass a specific target to the build script:
+
+    ```cmd
+    build.cmd --target Compile     # Build all projects (default)
+    build.cmd --target Test        # Build then run unit tests
+    build.cmd --target CI          # Full CI pipeline: compile + test
+    build.cmd --target Clean       # Clean all output directories
+    ```
+
+    For a Debug build locally:
+
+    ```cmd
+    build.cmd --configuration Debug
+    ```
+
+    Artifacts are placed in `bin/<Configuration>/`.
+  </Step>
+
+  <Step title="Open in Visual Studio or Rider">
+    Open `Dalamud.sln` in Visual Studio 2022 or JetBrains Rider. Both IDEs have Nuke support plugins available:
+
+    - **Visual Studio** — [nuke.build/visualstudio](https://nuke.build/visualstudio)
+    - **JetBrains Rider** — [nuke.build/rider](https://nuke.build/rider)
+
+    The C++ projects (`Dalamud.Boot`, `cimgui`, etc.) require the **Desktop development with C++** workload in Visual Studio. Rider delegates C++ compilation to MSBuild.
+  </Step>
+
+  <Step title="Run tests">
+    Execute the unit test suite with:
+
+    ```cmd
+    build.cmd --target Test
+    ```
+
+    Or directly with the .NET CLI:
+
+    ```bash
+    dotnet test Dalamud.Test/Dalamud.Test.csproj --configuration Debug
+    ```
+  </Step>
+</Steps>
+
+## Loading your local build
+
+Once compiled, you can point XIVLauncher at your local Dalamud build by setting the **Dalamud injection path** override in XIVLauncher's settings. Refer to the [Developer FAQ](https://goatcorp.github.io/faq/development) for the exact steps, as the process may change between XIVLauncher versions.
+
+<Note>
+  The `Dalamud.CorePlugin` project is an internal testbed for prototyping new Dalamud features. It compiles with access to Dalamud internals and is not a suitable base for user plugins. Use the [SamplePlugin](https://github.com/goatcorp/SamplePlugin) template for new plugin projects instead.
+</Note>
+
+## Getting help
+
+Join the [goatcorp Discord](https://discord.gg/3NMcUV5) for help with Dalamud development. The `#dev-general` channel is the right place for questions about contributing to the framework.

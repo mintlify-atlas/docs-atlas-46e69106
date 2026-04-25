@@ -1,0 +1,176 @@
+---
+title: "IPluginConfiguration interface reference"
+description: "IPluginConfiguration is the base interface for Dalamud plugin configuration classes, enabling structured save and load through IDalamudPluginInterface."
+---
+
+`IPluginConfiguration` is the minimal interface your configuration class must implement for Dalamud to serialize and deserialize it via `IDalamudPluginInterface`. Implementing this interface lets you call `SavePluginConfig()` and `GetPluginConfig()` without writing any custom serialization logic — Dalamud handles JSON serialization for you under the hood.
+
+## Interface definition
+
+```csharp
+namespace Dalamud.Configuration;
+
+/// <summary>
+/// Configuration to store settings for a dalamud plugin.
+/// </summary>
+public interface IPluginConfiguration
+{
+    /// <summary>
+    /// Gets or sets configuration version.
+    /// </summary>
+    int Version { get; set; }
+}
+```
+
+## Properties
+
+<ResponseField name="Version" type="int" required>
+  A schema version number for your configuration. Increment this value whenever you make breaking changes to your configuration layout. You can then check the version at load time and migrate old data to the new schema rather than losing user settings.
+</ResponseField>
+
+## Implementing a configuration class
+
+Create a concrete class that implements `IPluginConfiguration`. Add all your plugin-specific settings as plain properties. The class must be serializable by `System.Text.Json` or `Newtonsoft.Json` (Dalamud uses `Newtonsoft.Json` internally).
+
+```csharp
+using Dalamud.Configuration;
+
+[Serializable]
+public sealed class MyPluginConfig : IPluginConfiguration
+{
+    // Required by IPluginConfiguration.
+    public int Version { get; set; } = 1;
+
+    // Your plugin-specific settings.
+    public bool ShowOverlay { get; set; } = true;
+    public float OverlayOpacity { get; set; } = 0.85f;
+    public string PreferredLanguage { get; set; } = "en";
+}
+```
+
+<Tip>
+Mark your config class with `[Serializable]` to make the intent explicit, even though Dalamud does not strictly require it. It is also good practice to set sensible defaults directly on the properties so new users get a working configuration immediately.
+</Tip>
+
+## Saving configuration
+
+Call `SavePluginConfig()` on your `IDalamudPluginInterface` instance any time you want to persist the current configuration. Pass your configuration object directly.
+
+```csharp
+pluginInterface.SavePluginConfig(this.config);
+```
+
+Dalamud serializes the object to JSON and writes it to the plugin's configuration directory (`%APPDATA%\XIVLauncher\pluginConfig\<InternalName>`). The file is named after your plugin's internal name.
+
+## Loading configuration
+
+Call `GetPluginConfig()` to read a previously saved configuration. The method returns `null` if no configuration exists yet, so you should fall back to a default instance:
+
+```csharp
+this.config = (MyPluginConfig?)pluginInterface.GetPluginConfig()
+              ?? new MyPluginConfig();
+```
+
+<Note>
+`GetPluginConfig()` returns `IPluginConfiguration`, so you need to cast it to your concrete type before accessing your custom properties.
+</Note>
+
+## Complete example
+
+The following example shows the full lifecycle of a configuration — initialization in the constructor and saving in a config UI callback:
+
+```csharp
+using Dalamud.Configuration;
+using Dalamud.Plugin;
+
+[Serializable]
+public sealed class MyPluginConfig : IPluginConfiguration
+{
+    public int Version { get; set; } = 1;
+    public bool EnableFeature { get; set; } = true;
+    public int MaxItems { get; set; } = 50;
+}
+
+public sealed class MyPlugin : IDalamudPlugin
+{
+    private readonly IDalamudPluginInterface pluginInterface;
+    private MyPluginConfig config;
+
+    public MyPlugin(IDalamudPluginInterface pluginInterface)
+    {
+        this.pluginInterface = pluginInterface;
+
+        // Load existing config, or create a new one with defaults.
+        this.config = (MyPluginConfig?)pluginInterface.GetPluginConfig()
+                      ?? new MyPluginConfig();
+
+        // Register the config UI callback.
+        pluginInterface.UiBuilder.OpenConfigUi += this.OnOpenConfigUi;
+    }
+
+    public void Dispose()
+    {
+        this.pluginInterface.UiBuilder.OpenConfigUi -= this.OnOpenConfigUi;
+    }
+
+    private void OnOpenConfigUi()
+    {
+        // Draw config window here using ImGui, then save on change:
+        if (ImGui.Checkbox("Enable feature", ref this.config.EnableFeature))
+        {
+            this.pluginInterface.SavePluginConfig(this.config);
+        }
+    }
+}
+```
+
+## Schema migration
+
+When you change your configuration layout in a way that is incompatible with previously saved data, increment `Version` and run a migration on load:
+
+```csharp
+this.config = (MyPluginConfig?)pluginInterface.GetPluginConfig()
+              ?? new MyPluginConfig();
+
+// Migrate from version 1 to version 2.
+if (this.config.Version == 1)
+{
+    // For example, split a single string field into two fields.
+    this.config.FirstName = this.config.LegacyFullName?.Split(' ')[0] ?? string.Empty;
+    this.config.LastName  = this.config.LegacyFullName?.Split(' ')[1] ?? string.Empty;
+    this.config.Version = 2;
+
+    pluginInterface.SavePluginConfig(this.config);
+}
+```
+
+<Warning>
+Never remove `Version` from your class and never decrease its value. Dalamud uses this field to identify configuration files. Removing or lowering it can cause Dalamud to fail to associate the saved file with your plugin.
+</Warning>
+
+## JSON serialization notes
+
+Dalamud serializes your configuration with `Newtonsoft.Json`. Keep these rules in mind when designing your configuration class:
+
+- **Public properties** with getters and setters are serialized automatically.
+- **Private or read-only fields** are not serialized by default.
+- **Complex types** (lists, dictionaries, nested classes) are supported as long as they are themselves JSON-serializable.
+- Avoid circular references in your configuration graph.
+- Use `[JsonIgnore]` on properties you want to exclude from serialization.
+
+```csharp
+using Newtonsoft.Json;
+
+[Serializable]
+public sealed class MyPluginConfig : IPluginConfiguration
+{
+    public int Version { get; set; } = 1;
+
+    // Serialized normally.
+    public List<string> FavoriteItems { get; set; } = [];
+
+    // Excluded from the saved JSON.
+    [JsonIgnore]
+    public bool IsDirty { get; set; }
+}
+```
